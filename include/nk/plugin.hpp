@@ -13,7 +13,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory_resource>
+#include <string>
+#include <vector>
 
 #if defined(_WIN32) || defined(__CYGWIN__)
   #if defined(NK_PLUGIN_BUILD)
@@ -33,11 +36,38 @@ namespace nk {
 
 constexpr uint32_t NK_PLUGIN_ABI_VERSION = 1;
 
-// The signature of every registered function adapter in a dynamic module.
-using PluginFunc = void (*)(Span<const Value> args,
-                            size_t nargout,
-                            Span<Value> outs,
-                            std::pmr::memory_resource *mr);
+class Engine;
+struct Environment;
+
+struct CallContext
+{
+    Engine *engine{nullptr};
+    Environment *env{nullptr};
+};
+
+// Signature of external functions registered into the engine
+using ExternalFunc = std::function<void(Span<const Value> args,
+                                        size_t nargout,
+                                        Span<Value> outs,
+                                        CallContext &ctx)>;
+
+// Minimal engine abstraction required by adapters
+class Engine
+{
+public:
+    virtual ~Engine() = default;
+    virtual std::pmr::memory_resource *resource() const noexcept = 0;
+    virtual Value callFunctionHandle(const Value &handle, Span<const Value> args, void *env = nullptr) {
+        (void)handle; (void)args; (void)env;
+        return Value::empty();
+    }
+    virtual std::vector<Value> callFunctionHandleMulti(const Value &handle, Span<const Value> args, size_t nargout) {
+        (void)handle; (void)args; (void)nargout;
+        return {};
+    }
+    virtual void registerFunction(const std::string &ns, const std::string &name, ExternalFunc func) = 0;
+    virtual void registerFunction(const std::string &name, ExternalFunc func) = 0;
+};
 
 // Interface passed to nk_plugin_init by the host Engine.
 class PluginContext {
@@ -46,15 +76,10 @@ public:
 
     virtual uint32_t abiVersion() const noexcept { return NK_PLUGIN_ABI_VERSION; }
 
-    // Register a function into the host engine.
-    // `ns`: namespace prefix (e.g. "signal", "image"), or "" for bare/global.
-    // `name`: function name (e.g. "filter", "fir1").
-    // `func`: pointer to the adapter function.
     virtual void registerFunction(const char *ns,
                                   const char *name,
-                                  PluginFunc func) = 0;
+                                  ExternalFunc func) = 0;
 
-    // Default memory resource of the active engine session.
     virtual std::pmr::memory_resource *resource() noexcept = 0;
 };
 
