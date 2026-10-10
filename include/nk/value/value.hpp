@@ -662,18 +662,18 @@ private:
     static HeapObject sDeletedTag;
 
     // ── Tag constants ────────────────────────────────────────
-    static HeapObject *emptyTag() { return &sEmptyTag; }
-    static HeapObject *logicalTrueTag() { return &sLogicalTrue; }
-    static HeapObject *logicalFalseTag() { return &sLogicalFalse; }
-    static HeapObject *deletedTag() { return &sDeletedTag; }
+    static HeapObject *emptyTag() { return reinterpret_cast<HeapObject *>(uintptr_t(1)); }
+    static HeapObject *logicalTrueTag() { return reinterpret_cast<HeapObject *>(uintptr_t(2)); }
+    static HeapObject *logicalFalseTag() { return reinterpret_cast<HeapObject *>(uintptr_t(3)); }
+    static HeapObject *deletedTag() { return reinterpret_cast<HeapObject *>(uintptr_t(4)); }
 
     // ── Internal helpers ─────────────────────────────────────
     bool isTag() const
     {
-        return heap_ == emptyTag() || heap_ == logicalTrueTag()
-            || heap_ == logicalFalseTag() || heap_ == deletedTag();
+        uintptr_t u = reinterpret_cast<uintptr_t>(heap_);
+        return u >= 1 && u <= 4;
     }
-    bool isHeap() const { return heap_ != nullptr && !isTag(); }
+    bool isHeap() const { return reinterpret_cast<uintptr_t>(heap_) > 4; }
 
     void releaseHeap();
     void detach();
