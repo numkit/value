@@ -2538,7 +2538,7 @@ ValueType Value::type() const
 {
     if (heap_ == nullptr)
         return ValueType::DOUBLE;
-    if (heap_ == emptyTag())
+    if (heap_ == emptyTag() || heap_ == deletedTag())
         return ValueType::EMPTY;
     if (heap_ == logicalTrueTag() || heap_ == logicalFalseTag())
         return ValueType::LOGICAL;
@@ -2548,7 +2548,7 @@ const Dims &Value::dims() const
 {
     if (heap_ == nullptr)
         return sScalarDims;
-    if (heap_ == emptyTag())
+    if (heap_ == emptyTag() || heap_ == deletedTag())
         return sEmptyDims;
     if (heap_ == logicalTrueTag() || heap_ == logicalFalseTag())
         return sScalarDims;
@@ -2562,13 +2562,13 @@ bool Value::isScalar() const
 {
     if (heap_ == nullptr || heap_ == logicalTrueTag() || heap_ == logicalFalseTag())
         return true;
-    if (heap_ == emptyTag())
+    if (heap_ == emptyTag() || heap_ == deletedTag())
         return false;
     return heap_->dims.isScalar();
 }
 bool Value::isEmpty() const
 {
-    if (heap_ == emptyTag())
+    if (heap_ == emptyTag() || heap_ == deletedTag())
         return true;
     if (heap_ == nullptr || heap_ == logicalTrueTag() || heap_ == logicalFalseTag())
         return false;
@@ -3067,7 +3067,7 @@ bool Value::toBool() const
         return true;
     if (heap_ == logicalFalseTag())
         return false;
-    if (heap_ == emptyTag())
+    if (heap_ == emptyTag() || heap_ == deletedTag())
         throw std::runtime_error("Cannot convert empty to bool");
     auto *h = heap_;
     if (h->type == ValueType::LOGICAL && h->dims.isScalar() && h->buffer)
@@ -3453,7 +3453,7 @@ void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *m
     // Empty (tag) → fresh DOUBLE heap with the requested shape; no
     // existing data to preserve. Same path is used for the auto-grow
     // case `A(i,j,k,l) = v` when A doesn't exist yet.
-    if (heap_ == emptyTag()) {
+    if (heap_ == emptyTag() || heap_ == deletedTag()) {
         *this = matrixND(newDims, nd, ValueType::DOUBLE, mr);
         return;
     }
@@ -3535,7 +3535,7 @@ void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *m
 
 void Value::ensureSize(size_t idx, std::pmr::memory_resource *mr)
 {
-    if (heap_ == emptyTag() || (heap_ == nullptr && idx > 0)) {
+    if (heap_ == emptyTag() || heap_ == deletedTag() || (heap_ == nullptr && idx > 0)) {
         double old = (heap_ == nullptr) ? scalar_ : 0.0;
         *this = matrix(1, idx + 1, ValueType::DOUBLE, mr);
         if (old != 0.0)
