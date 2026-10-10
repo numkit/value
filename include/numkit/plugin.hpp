@@ -51,11 +51,11 @@ using ExternalFunc = std::function<void(Span<const Value> args,
                                         Span<Value> outs,
                                         CallContext &ctx)>;
 
-// Minimal engine abstraction required by adapters
-class Engine
-{
+// PluginContext: host interface passed to numkit_plugin_init.
+// Inherited by HostPluginContext in the host engine.
+class PluginContext {
 public:
-    virtual ~Engine() = default;
+    virtual ~PluginContext() = default;
     virtual std::pmr::memory_resource *resource() const noexcept = 0;
     virtual void registerFunction(const std::string &ns, const std::string &name, ExternalFunc func) = 0;
     virtual void registerFunction(const std::string &name, ExternalFunc func) = 0;
@@ -67,13 +67,6 @@ public:
         (void)handle; (void)args; (void)nargout;
         return {};
     }
-};
-
-// Interface passed to numkit_plugin_init by the host Engine.
-// Inherits from Engine so that existing XLibrary::install(engine) calls work directly.
-class PluginContext : public Engine {
-public:
-    virtual ~PluginContext() = default;
     virtual uint32_t abiVersion() const noexcept { return NUMKIT_PLUGIN_ABI_VERSION; }
 };
 
