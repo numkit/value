@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace nk {
+namespace numkit {
 
 template<typename T>
 class Span
@@ -54,4 +54,4 @@ private:
     size_t size_;
 };
 
-} // namespace nk
+} // namespace numkit

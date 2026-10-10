@@ -11,13 +11,13 @@
 
 #pragma once
 
-#include <nk/value/dims.hpp>
+#include <numkit/value/dims.hpp>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 
-namespace nk {
+namespace numkit {
 
 // ============================================================
 // broadcastDimsND
@@ -194,4 +194,4 @@ inline void forEachOuterPage(const Dims &d, Fn &&fn)
     }
 }
 
-} // namespace nk
+} // namespace numkit

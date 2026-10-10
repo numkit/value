@@ -1,11 +1,11 @@
-// include/nk/plugin.hpp
+// include/numkit/plugin.hpp
 //
-// nk::PluginContext — the plugin boundary protocol for NumKit modules.
+// numkit::PluginContext — the plugin boundary protocol for NumKit modules.
 #pragma once
 
-#include <nk/value/value.hpp>
-#include <nk/value/span.hpp>
-#include <nk/value/error.hpp>
+#include <numkit/value/value.hpp>
+#include <numkit/value/span.hpp>
+#include <numkit/value/error.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -14,27 +14,33 @@
 #include <string>
 #include <vector>
 
+#ifndef NUMKIT_PLUGIN_ABI_VERSION
+#  define NUMKIT_PLUGIN_ABI_VERSION 1
+#endif
 #ifndef NK_PLUGIN_ABI_VERSION
-#  define NK_PLUGIN_ABI_VERSION 1
+#  define NK_PLUGIN_ABI_VERSION NUMKIT_PLUGIN_ABI_VERSION
 #endif
 
-#if !defined(NK_PLUGIN_EXPORT)
+#if !defined(NUMKIT_PLUGIN_EXPORT)
   #if defined(_WIN32) || defined(__CYGWIN__)
-    #if defined(NK_PLUGIN_BUILD)
-      #define NK_PLUGIN_EXPORT __declspec(dllexport)
+    #if defined(NUMKIT_PLUGIN_BUILD) || defined(NK_PLUGIN_BUILD)
+      #define NUMKIT_PLUGIN_EXPORT __declspec(dllexport)
     #else
-      #define NK_PLUGIN_EXPORT
+      #define NUMKIT_PLUGIN_EXPORT
     #endif
   #else
     #if defined(__GNUC__) && __GNUC__ >= 4
-      #define NK_PLUGIN_EXPORT __attribute__((visibility("default")))
+      #define NUMKIT_PLUGIN_EXPORT __attribute__((visibility("default")))
     #else
-      #define NK_PLUGIN_EXPORT
+      #define NUMKIT_PLUGIN_EXPORT
     #endif
   #endif
 #endif
+#ifndef NK_PLUGIN_EXPORT
+#  define NK_PLUGIN_EXPORT NUMKIT_PLUGIN_EXPORT
+#endif
 
-namespace nk {
+namespace numkit {
 
 class Engine;
 struct Environment;
@@ -69,16 +75,17 @@ public:
     }
 };
 
-// Interface passed to nk_plugin_init by the host Engine.
-// Inherits from Engine so that existing XLibrary::install(engine) calls work directly!
+// Interface passed to numkit_plugin_init by the host Engine.
+// Inherits from Engine so that existing XLibrary::install(engine) calls work directly.
 class PluginContext : public Engine {
 public:
     virtual ~PluginContext() = default;
-    virtual uint32_t abiVersion() const noexcept { return NK_PLUGIN_ABI_VERSION; }
+    virtual uint32_t abiVersion() const noexcept { return NUMKIT_PLUGIN_ABI_VERSION; }
 };
 
-} // namespace nk
+} // namespace numkit
 
 // Entry point type of every dynamic module:
-// extern "C" NK_PLUGIN_EXPORT bool nk_plugin_init(nk::PluginContext &ctx);
-typedef bool (*NkPluginInitFn)(nk::PluginContext &ctx);
+// extern "C" NUMKIT_PLUGIN_EXPORT bool numkit_plugin_init(numkit::PluginContext &ctx);
+typedef bool (*NumkitPluginInitFn)(numkit::PluginContext &ctx);
+typedef bool (*NkPluginInitFn)(numkit::PluginContext &ctx);

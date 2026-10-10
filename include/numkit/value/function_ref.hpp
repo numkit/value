@@ -1,6 +1,6 @@
 // core/include/nk/value/function_ref.hpp
 //
-// nk::function_ref<Sig> — lightweight, non-owning callable view.
+// numkit::function_ref<Sig> — lightweight, non-owning callable view.
 //
 // Two-pointer type-erased reference to any callable matching the
 // signature `Sig`. Cheap to copy (16 bytes on 64-bit), no allocation,
@@ -22,7 +22,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace nk {
+namespace numkit {
 
 template <class Sig>
 class function_ref;  // primary template undefined — only spec'd below
@@ -75,4 +75,4 @@ private:
     thunk_t thunk_ = nullptr;
 };
 
-} // namespace nk
+} // namespace numkit

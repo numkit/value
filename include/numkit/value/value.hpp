@@ -1,7 +1,7 @@
 #pragma once
 
-#include <nk/value/heap_object.hpp>
-#include <nk/value/span.hpp>
+#include <numkit/value/heap_object.hpp>
+#include <numkit/value/span.hpp>
 
 #include <array>
 #include <atomic>
@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace nk {
+namespace numkit {
 
 using Complex = std::complex<double>;
 
@@ -742,4 +742,4 @@ inline Value::Value(const std::array<T, N> &a, std::pmr::memory_resource *mr)
     *this = makeContiguous(a.data(), N, vt, sizeof(T), mr);
 }
 
-} // namespace nk
+} // namespace numkit

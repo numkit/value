@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace nk {
+namespace numkit {
 
 // ============================================================
 // Dims — array dimensions, ND with SBO storage.
@@ -103,4 +103,4 @@ private:
     uint8_t  nd_;
 };
 
-} // namespace nk
+} // namespace numkit

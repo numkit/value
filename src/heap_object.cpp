@@ -1,11 +1,11 @@
 // src/heap_object.cpp
-#include <nk/value/heap_object.hpp>
-#include <nk/value/object.hpp>
-#include <nk/value/value.hpp>
+#include <numkit/value/heap_object.hpp>
+#include <numkit/value/object.hpp>
+#include <numkit/value/value.hpp>
 
 #include <cstring>
 
-namespace nk {
+namespace numkit {
 
 HeapObject::~HeapObject()
 {
@@ -71,4 +71,4 @@ HeapObject *HeapObject::clone() const
     return h;
 }
 
-} // namespace nk
+} // namespace numkit

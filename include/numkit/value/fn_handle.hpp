@@ -1,6 +1,6 @@
 // core/include/nk/value/fn_handle.hpp
 //
-// nk::FnHandle — the canonical MATLAB-style callback type used by
+// numkit::FnHandle — the canonical MATLAB-style callback type used by
 // the numerical-library API for any function that takes a
 // user-supplied function handle (fzero, integral, fminsearch,
 // cellfun, structfun, …).
@@ -38,11 +38,11 @@
 
 #include <memory_resource>
 
-#include <nk/value/function_ref.hpp>
-#include <nk/value/span.hpp>
-#include <nk/value/value.hpp>
+#include <numkit/value/function_ref.hpp>
+#include <numkit/value/span.hpp>
+#include <numkit/value/value.hpp>
 
-namespace nk {
+namespace numkit {
 
 /// @brief MATLAB-style function-handle callback.
 ///
@@ -55,4 +55,4 @@ using FnHandle = function_ref<void(Span<const Value>           args,
                                     Span<Value>                 outs,
                                     std::pmr::memory_resource * mr)>;
 
-} // namespace nk
+} // namespace numkit

@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-add_library(nk_value STATIC
+add_library(numkit_value STATIC
     src/data_buffer.cpp
     src/dims.cpp
     src/heap_object.cpp
@@ -13,20 +13,22 @@ add_library(nk_value STATIC
     src/value_type.cpp
 )
 
-add_library(nk::value ALIAS nk_value)
+add_library(numkit::value ALIAS numkit_value)
+add_library(nk_value ALIAS numkit_value)
+add_library(nk::value ALIAS numkit_value)
 
-target_include_directories(nk_value PUBLIC
+target_include_directories(numkit_value PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 
 if(EMSCRIPTEN)
-    target_compile_options(nk_value PRIVATE -fexceptions)
+    target_compile_options(numkit_value PRIVATE -fexceptions)
 endif()
 
 # Installation rules
 include(GNUInstallDirs)
-install(TARGETS nk_value
+install(TARGETS numkit_value
     EXPORT numkit_value_targets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

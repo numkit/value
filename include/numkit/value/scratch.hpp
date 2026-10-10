@@ -60,7 +60,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace nk {
+namespace numkit {
 
 template <class T>
 class ScratchVec : public std::pmr::vector<T>
@@ -108,4 +108,4 @@ public:
     ScratchArena &operator=(ScratchArena &&)      = delete;
 };
 
-}  // namespace nk
+}  // namespace numkit

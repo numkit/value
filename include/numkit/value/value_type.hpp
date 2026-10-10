@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace nk {
+namespace numkit {
 
 // ============================================================
 // ValueType — element type enum
@@ -41,4 +41,4 @@ size_t elementSize(ValueType t);
 bool isIntegerType(ValueType t);
 bool isFloatType(ValueType t); // double or single
 
-} // namespace nk
+} // namespace numkit

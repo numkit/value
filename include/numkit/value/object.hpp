@@ -6,8 +6,8 @@
 // is registered once with the Engine as a BuiltinClass.
 #pragma once
 
-#include <nk/value/span.hpp>
-#include <nk/value/value.hpp>
+#include <numkit/value/span.hpp>
+#include <numkit/value/value.hpp>
 
 #include <functional>
 #include <map>
@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace nk {
+namespace numkit {
 
 struct CallContext;   // defined in types.hpp; used only by-reference here
 struct UserFunction;  // defined in types.hpp; held by shared_ptr in BuiltinClass
@@ -136,4 +136,4 @@ struct BuiltinClass
     std::unordered_map<std::string, std::shared_ptr<const UserFunction>> methodFns;
 };
 
-} // namespace nk
+} // namespace numkit

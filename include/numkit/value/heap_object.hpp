@@ -1,9 +1,9 @@
 // include/heap_object.hpp
 #pragma once
 
-#include <nk/value/data_buffer.hpp>
-#include <nk/value/dims.hpp>
-#include <nk/value/value_type.hpp>
+#include <numkit/value/data_buffer.hpp>
+#include <numkit/value/dims.hpp>
+#include <numkit/value/value_type.hpp>
 
 #include <atomic>
 #include <map>
@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace nk {
+namespace numkit {
 
 class Value;        // forward decl
 struct ObjectState; // OBJECT instance state (see object.hpp); held by shared_ptr
@@ -86,4 +86,4 @@ struct HeapObject
     HeapObject *clone() const;
 };
 
-} // namespace nk
+} // namespace numkit

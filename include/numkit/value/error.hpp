@@ -1,20 +1,20 @@
 // value/include/nk/value/error.hpp
 //
-// nk::Error — the runtime error type carrying an optional source
+// numkit::Error — the runtime error type carrying an optional source
 // location (line/col/function/context) and a MATLAB-style identifier.
 //
 // An L0 type: it depends only on the C++ standard library, so every layer —
 // value, ops, the toolboxes, and core — can throw and catch it. (It used to
 // live in core/types.hpp; moving it down lets the foundation/toolboxes report
 // errors without pulling in the engine.) types.hpp re-includes this header so
-// existing `nk::Error` users are unaffected.
+// existing `numkit::Error` users are unaffected.
 
 #pragma once
 
 #include <stdexcept>
 #include <string>
 
-namespace nk {
+namespace numkit {
 
 // ============================================================
 // Runtime error with source location
@@ -87,4 +87,4 @@ private:
     std::string identifier_; // e.g. "nk:badInput"
 };
 
-} // namespace nk
+} // namespace numkit

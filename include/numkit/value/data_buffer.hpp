@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <memory_resource>
 
-namespace nk {
+namespace numkit {
 
 // ============================================================
 // DataBuffer — raw memory block with ref-counting
@@ -54,4 +54,4 @@ private:
     bool owns_ = true;
 };
 
-} // namespace nk
+} // namespace numkit

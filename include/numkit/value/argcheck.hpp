@@ -1,6 +1,6 @@
 // value/include/nk/value/argcheck.hpp
 //
-// nk::argcheck — engine-free argument-validation primitives with
+// numkit::argcheck — engine-free argument-validation primitives with
 // nk-voiced diagnostics.
 //
 // Part of the explicit argcheck separation (dev-docs/todo/
@@ -30,12 +30,12 @@
 #include <string>
 #include <string_view>
 
-#include <nk/value/error.hpp>
-#include <nk/value/span.hpp>
-#include <nk/value/value.hpp>
-#include <nk/value/value_type.hpp>   // mtypeName (class got-clauses)
+#include <numkit/value/error.hpp>
+#include <numkit/value/span.hpp>
+#include <numkit/value/value.hpp>
+#include <numkit/value/value_type.hpp>   // mtypeName (class got-clauses)
 
-namespace nk::argcheck {
+namespace numkit::argcheck {
 
 namespace detail {
 
@@ -626,4 +626,4 @@ void forEachNvPair(Span<const Value> in, std::size_t start,
     }
 }
 
-} // namespace nk::argcheck
+} // namespace numkit::argcheck
