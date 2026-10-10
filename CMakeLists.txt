@@ -14,8 +14,6 @@ add_library(numkit_value STATIC
 )
 
 add_library(numkit::value ALIAS numkit_value)
-add_library(nk_value ALIAS numkit_value)
-add_library(nk::value ALIAS numkit_value)
 
 target_include_directories(numkit_value PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

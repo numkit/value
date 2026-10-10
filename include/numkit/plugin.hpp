@@ -17,13 +17,10 @@
 #ifndef NUMKIT_PLUGIN_ABI_VERSION
 #  define NUMKIT_PLUGIN_ABI_VERSION 1
 #endif
-#ifndef NK_PLUGIN_ABI_VERSION
-#  define NK_PLUGIN_ABI_VERSION NUMKIT_PLUGIN_ABI_VERSION
-#endif
 
 #if !defined(NUMKIT_PLUGIN_EXPORT)
   #if defined(_WIN32) || defined(__CYGWIN__)
-    #if defined(NUMKIT_PLUGIN_BUILD) || defined(NK_PLUGIN_BUILD)
+    #if defined(NUMKIT_PLUGIN_BUILD)
       #define NUMKIT_PLUGIN_EXPORT __declspec(dllexport)
     #else
       #define NUMKIT_PLUGIN_EXPORT
@@ -35,9 +32,6 @@
       #define NUMKIT_PLUGIN_EXPORT
     #endif
   #endif
-#endif
-#ifndef NK_PLUGIN_EXPORT
-#  define NK_PLUGIN_EXPORT NUMKIT_PLUGIN_EXPORT
 #endif
 
 namespace numkit {
@@ -88,4 +82,3 @@ public:
 // Entry point type of every dynamic module:
 // extern "C" NUMKIT_PLUGIN_EXPORT bool numkit_plugin_init(numkit::PluginContext &ctx);
 typedef bool (*NumkitPluginInitFn)(numkit::PluginContext &ctx);
-typedef bool (*NkPluginInitFn)(numkit::PluginContext &ctx);
