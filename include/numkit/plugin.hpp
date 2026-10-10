@@ -36,14 +36,13 @@
 
 namespace numkit {
 
+#if defined(NUMKIT_CORE_BUILD)
 class Engine;
-struct Environment;
+#endif
 
-struct CallContext
-{
-    Engine *engine{nullptr};
-    Environment *env{nullptr};
-};
+class PluginContext;
+struct Environment;
+struct CallContext;
 
 // Signature of external functions registered into the engine
 using ExternalFunc = std::function<void(Span<const Value> args,
@@ -68,6 +67,16 @@ public:
         return {};
     }
     virtual uint32_t abiVersion() const noexcept { return NUMKIT_PLUGIN_ABI_VERSION; }
+};
+
+#if !defined(NUMKIT_CORE_BUILD)
+using Engine = PluginContext;
+#endif
+
+struct CallContext
+{
+    Engine *engine{nullptr};
+    Environment *env{nullptr};
 };
 
 } // namespace numkit
