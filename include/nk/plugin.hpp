@@ -70,17 +70,11 @@ public:
 };
 
 // Interface passed to nk_plugin_init by the host Engine.
-class PluginContext {
+// Inherits from Engine so that existing XLibrary::install(engine) calls work directly!
+class PluginContext : public Engine {
 public:
     virtual ~PluginContext() = default;
-
     virtual uint32_t abiVersion() const noexcept { return NK_PLUGIN_ABI_VERSION; }
-
-    virtual void registerFunction(const char *ns,
-                                  const char *name,
-                                  ExternalFunc func) = 0;
-
-    virtual std::pmr::memory_resource *resource() noexcept = 0;
 };
 
 } // namespace nk
