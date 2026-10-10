@@ -59,7 +59,7 @@ public:
     virtual std::pmr::memory_resource *resource() const noexcept = 0;
     virtual Value callFunctionHandle(const Value &handle, Span<const Value> args, void *env = nullptr) {
         (void)handle; (void)args; (void)env;
-        return Value::empty();
+        return Value();
     }
     virtual std::vector<Value> callFunctionHandleMulti(const Value &handle, Span<const Value> args, size_t nargout) {
         (void)handle; (void)args; (void)nargout;
