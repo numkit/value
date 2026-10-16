@@ -84,7 +84,7 @@ private:
     int col_;
     std::string funcName_;
     std::string context_;    // e.g. "in call to 'sin'"
-    std::string identifier_; // e.g. "nk:badInput"
+    std::string identifier_; // e.g. "numkit:badInput"
 };
 
 } // namespace numkit

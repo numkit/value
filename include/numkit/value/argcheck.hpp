@@ -80,7 +80,7 @@ inline void checkNargin(size_t actual, size_t minArgs, std::string_view fn)
         detail::fail(std::string(fn) + ": not enough input arguments — at "
                      "least " + std::to_string(minArgs) + " required (got "
                          + std::to_string(actual) + ").",
-                     fn, "nk:" + std::string(fn) + ":nargin");
+                     fn, "numkit:" + std::string(fn) + ":nargin");
 }
 
 inline void checkNargin(size_t actual, size_t minArgs, size_t maxArgs,
@@ -91,7 +91,7 @@ inline void checkNargin(size_t actual, size_t minArgs, size_t maxArgs,
         detail::fail(std::string(fn) + ": too many input arguments — at "
                      "most " + std::to_string(maxArgs) + " accepted (got "
                          + std::to_string(actual) + ").",
-                     fn, "nk:" + std::string(fn) + ":maxnargin");
+                     fn, "numkit:" + std::string(fn) + ":maxnargin");
 }
 
 // ============================================================
@@ -111,17 +111,17 @@ inline size_t arrayDim(double d, std::string_view fn)
     if (std::isnan(d) || std::isinf(d))
         detail::fail(std::string(fn) + ": size inputs must be finite (got "
                      + detail::num(d) + ").",
-                     fn, "nk:" + std::string(fn) + ":sizeNotFinite");
+                     fn, "numkit:" + std::string(fn) + ":sizeNotFinite");
     if (d != std::floor(d))
         detail::fail(std::string(fn) + ": size inputs must be integers "
                      "(got " + detail::num(d) + ").",
-                     fn, "nk:" + std::string(fn) + ":sizeNotInteger");
+                     fn, "numkit:" + std::string(fn) + ":sizeNotInteger");
     if (d < 0.0)
         return 0;
     if (d >= static_cast<double>(std::numeric_limits<size_t>::max()))
         detail::fail(std::string(fn) + ": requested array size exceeds the "
                      "supported maximum (got " + detail::num(d) + ").",
-                     fn, "nk:" + std::string(fn) + ":sizeTooLarge");
+                     fn, "numkit:" + std::string(fn) + ":sizeTooLarge");
     return static_cast<size_t>(d);
 }
 
@@ -132,7 +132,7 @@ inline void arrayDimReal(const Value &v, std::string_view fn)
     if (v.isComplex())
         detail::fail(std::string(fn) + ": size inputs must be real "
                      "(argument is complex).",
-                     fn, "nk:" + std::string(fn) + ":sizeNotReal");
+                     fn, "numkit:" + std::string(fn) + ":sizeNotReal");
 }
 
 // Whole-argument form — scalar/real checks first (a complex SCALAR is
@@ -143,7 +143,7 @@ inline size_t arrayDim(const Value &v, std::string_view fn)
     if (!v.isScalar())
         detail::fail(std::string(fn) + ": size inputs must be scalars "
                      "(argument is " + detail::dimsStr(v) + ").",
-                     fn, "nk:" + std::string(fn) + ":sizeNotScalar");
+                     fn, "numkit:" + std::string(fn) + ":sizeNotScalar");
     arrayDimReal(v, fn);
     return arrayDim(v.toScalar(), fn);
 }
@@ -162,7 +162,7 @@ inline void reshapeSizeReal(const Value &v, std::string_view fn)
     if (v.isComplex())
         detail::fail(std::string(fn) + ": size inputs must be real "
                      "(argument is complex).",
-                     fn, "nk:" + std::string(fn) + ":sizeNotReal");
+                     fn, "numkit:" + std::string(fn) + ":sizeNotReal");
 }
 
 // Value-level extraction for one scalar size position. The caller checks
@@ -173,7 +173,7 @@ inline double reshapeSizeArg(const Value &v, std::string_view fn)
     if (!v.isScalar())
         detail::fail(std::string(fn) + ": size inputs must be scalars "
                      "(argument is " + detail::dimsStr(v) + ").",
-                     fn, "nk:" + std::string(fn) + ":sizeNotScalar");
+                     fn, "numkit:" + std::string(fn) + ":sizeNotScalar");
     reshapeSizeReal(v, fn);
     return v.toScalar();
 }
@@ -183,17 +183,17 @@ inline size_t reshapeSize(double d, std::string_view fn)
     if (d < 0.0)
         detail::fail(std::string(fn) + ": size inputs must be non-negative "
                      "(got " + detail::num(d) + ").",
-                     fn, "nk:" + std::string(fn) + ":sizeNegative");
+                     fn, "numkit:" + std::string(fn) + ":sizeNegative");
     if (std::isnan(d) || std::isinf(d) || d != std::floor(d))
         detail::fail(std::string(fn) + ": size inputs must be real "
                      "integers (got " + detail::num(d) + ").",
-                     fn, "nk:" + std::string(fn) + ":sizeNotInteger");
+                     fn, "numkit:" + std::string(fn) + ":sizeNotInteger");
     // Cast-safety guard only (the numel-preservation check in reshape
     // catches unrealistic sizes first).
     if (d >= static_cast<double>(std::numeric_limits<size_t>::max()))
         detail::fail(std::string(fn) + ": requested array size exceeds the "
                      "supported maximum (got " + detail::num(d) + ").",
-                     fn, "nk:" + std::string(fn) + ":sizeTooLarge");
+                     fn, "numkit:" + std::string(fn) + ":sizeTooLarge");
     return static_cast<size_t>(d);
 }
 
@@ -208,7 +208,7 @@ inline size_t reshapeSize(double d, std::string_view fn)
 inline double expectedReal(const Value &v, int argNum,
                            std::string_view argName, std::string_view fn)
 {
-    const std::string id = "nk:" + std::string(fn) + ":"
+    const std::string id = "numkit:" + std::string(fn) + ":"
                            + std::string(argName);
     if (!v.isScalar())
         detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
@@ -232,7 +232,7 @@ inline void expectedPositive(double v, int argNum, std::string_view argName,
         detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
                          + " (" + std::string(argName) + ") must be "
                          "positive (got " + detail::num(v) + ").",
-                     fn, "nk:" + std::string(fn) + ":"
+                     fn, "numkit:" + std::string(fn) + ":"
                          + std::string(argName) + "NotPositive");
 }
 
@@ -253,15 +253,15 @@ inline int dimArg(double d, std::string_view fn)
     if (std::isnan(d) || std::isinf(d))
         detail::fail(std::string(fn) + ": dimension argument must be finite "
                      "(got " + detail::num(d) + ").",
-                     fn, "nk:" + std::string(fn) + ":dimNotFinite");
+                     fn, "numkit:" + std::string(fn) + ":dimNotFinite");
     if (d != std::floor(d))
         detail::fail(std::string(fn) + ": dimension argument must be an "
                      "integer (got " + detail::num(d) + ").",
-                     fn, "nk:" + std::string(fn) + ":dimNotInteger");
+                     fn, "numkit:" + std::string(fn) + ":dimNotInteger");
     if (d < 1.0)
         detail::fail(std::string(fn) + ": dimension argument must be a "
                      "positive integer (got " + detail::num(d) + ").",
-                     fn, "nk:" + std::string(fn) + ":dimNotPositive");
+                     fn, "numkit:" + std::string(fn) + ":dimNotPositive");
     return static_cast<int>(d);
 }
 
@@ -273,11 +273,11 @@ inline int dimArg(const Value &v, std::string_view fn)
     if (!v.isScalar())
         detail::fail(std::string(fn) + ": dimension argument must be a "
                      "scalar (argument is " + detail::dimsStr(v) + ").",
-                     fn, "nk:" + std::string(fn) + ":dimNotScalar");
+                     fn, "numkit:" + std::string(fn) + ":dimNotScalar");
     if (v.isComplex())
         detail::fail(std::string(fn) + ": dimension argument must be real "
                      "(argument is complex).",
-                     fn, "nk:" + std::string(fn) + ":dimNotReal");
+                     fn, "numkit:" + std::string(fn) + ":dimNotReal");
     return dimArg(v.toScalar(), fn);
 }
 
@@ -296,7 +296,7 @@ inline int expectedInteger(double v, int argNum, std::string_view argName,
         detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
                          + " (" + std::string(argName) + ") must be an "
                          "integer (got " + detail::num(v) + ").",
-                     fn, "nk:" + std::string(fn) + ":"
+                     fn, "numkit:" + std::string(fn) + ":"
                          + std::string(argName) + "NotInteger");
     return static_cast<int>(v);
 }
@@ -308,7 +308,7 @@ inline void expectedNonNegative(double v, int argNum, std::string_view argName,
         detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
                          + " (" + std::string(argName) + ") must be "
                          "non-negative (got " + detail::num(v) + ").",
-                     fn, "nk:" + std::string(fn) + ":"
+                     fn, "numkit:" + std::string(fn) + ":"
                          + std::string(argName) + "NotNegative");
 }
 
@@ -320,7 +320,7 @@ inline void expectedFlag01(double v, int argNum, std::string_view argName,
         detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
                          + " (" + std::string(argName) + ") must be "
                          "0 or 1 (got " + detail::num(v) + ").",
-                     fn, "nk:" + std::string(fn) + ":"
+                     fn, "numkit:" + std::string(fn) + ":"
                          + std::string(argName) + "Not01");
 }
 
@@ -346,7 +346,7 @@ inline void expectedBetween(double v, double lo, double hi, int argNum,
                          + " (" + std::string(argName) + ") must be between "
                          + detail::num(lo) + " and " + detail::num(hi)
                          + " inclusive (got " + detail::num(v) + ").",
-                     fn, "nk:" + std::string(fn) + ":"
+                     fn, "numkit:" + std::string(fn) + ":"
                          + std::string(argName) + "OutOfRange");
 }
 
@@ -371,7 +371,7 @@ inline int expectedOneOf(double v, std::initializer_list<double> choices,
     detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
                      + " (" + std::string(argName) + ") must be one of: "
                      + list + " (got " + detail::num(v) + ").",
-                 fn, "nk:" + std::string(fn) + ":"
+                 fn, "numkit:" + std::string(fn) + ":"
                      + std::string(argName) + "NotChoice");
 }
 
@@ -389,7 +389,7 @@ inline size_t roundLength(const Value &v, int argNum, std::string_view argName,
         detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
                          + " (" + std::string(argName) + ") must be "
                          "non-negative (got " + detail::num(d) + ").",
-                     fn, "nk:" + std::string(fn) + ":"
+                     fn, "numkit:" + std::string(fn) + ":"
                          + std::string(argName) + "NotNegative");
     return static_cast<size_t>(r);
 }
@@ -435,7 +435,7 @@ inline size_t expectedChoice(const Value &v,
     detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
                      + " (" + std::string(argName) + ") must be one of: "
                      + list + " (" + describe() + ").",
-                 fn, "nk:" + std::string(fn) + ":"
+                 fn, "numkit:" + std::string(fn) + ":"
                      + std::string(argName) + "NotChoice");
 }
 
@@ -574,7 +574,7 @@ inline void requireClassSet(const Value &x, ClassMask accept,
     if (c == ClsCpx && !voice.complexRejected.empty())
         detail::fail(std::string(fn) + ": " + std::string(argName)
                      + " must be real (got a complex array).",
-                     fn, "nk:" + std::string(fn) + ":"
+                     fn, "numkit:" + std::string(fn) + ":"
                          + std::string(voice.complexRejected));
     if (c == ClsSgl && maskAccepts(accept, ClsDbl)
         && !voice.singleRejected.empty())
@@ -582,12 +582,12 @@ inline void requireClassSet(const Value &x, ClassMask accept,
                      + " is not supported in single precision in this "
                        "revision (pass a double array; got "
                      + got + ").",
-                     fn, "nk:" + std::string(fn) + ":"
+                     fn, "numkit:" + std::string(fn) + ":"
                          + std::string(voice.singleRejected));
     detail::fail(std::string(fn) + ": " + std::string(argName)
                  + " has an unsupported class for this function (got "
                  + got + ").",
-                 fn, "nk:" + std::string(fn) + ":"
+                 fn, "numkit:" + std::string(fn) + ":"
                      + std::string(voice.notAccepted));
 }
 
@@ -610,13 +610,13 @@ void forEachNvPair(Span<const Value> in, std::size_t start,
     if ((in.size() - start) % 2 != 0)
         detail::fail(std::string(fn) + ": each parameter name needs a "
                      "value (unmatched value in the name-value list).",
-                     fn, "nk:" + std::string(fn) + ":nvMismatch");
+                     fn, "numkit:" + std::string(fn) + ":nvMismatch");
     for (std::size_t i = start; i + 1 < in.size(); i += 2) {
         const Value &name = in[i];
         if (!(name.isChar() || name.isString()))
             detail::fail(std::string(fn) + ": expected a parameter name "
                          "(unmatched value in the name-value list).",
-                         fn, "nk:" + std::string(fn) + ":nvMismatch");
+                         fn, "numkit:" + std::string(fn) + ":nvMismatch");
         const int hit = matchStringChoice(name, names);
         if (hit < 0)
             detail::fail(std::string(fn) + ": unrecognized parameter "
