@@ -3360,6 +3360,10 @@ void Value::resize(size_t newRows, size_t newCols, std::pmr::memory_resource *mr
         *static_cast<double *>(h->buffer->data()) = v;
         heap_ = h;
     }
+    if (heap_ == emptyTag() || heap_ == deletedTag()) {
+        *this = matrix(newRows, newCols, ValueType::DOUBLE, mr);
+        return;
+    }
     if (!isHeap())
         throw std::runtime_error("Cannot resize");
     if (heap_->dims.is3D()) {
@@ -3396,6 +3400,20 @@ void Value::resize3d(size_t nr, size_t nc, size_t np, std::pmr::memory_resource 
 {
     if (np <= 1) {
         resize(nr, nc, mr);
+        return;
+    }
+    if (heap_ == nullptr) {
+        double v = scalar_;
+        auto *h = new HeapObject();
+        h->type = ValueType::DOUBLE;
+        h->dims = {1, 1};
+        h->mr = mr;
+        h->buffer = new DataBuffer(sizeof(double), mr);
+        *static_cast<double *>(h->buffer->data()) = v;
+        heap_ = h;
+    }
+    if (heap_ == emptyTag() || heap_ == deletedTag()) {
+        *this = matrix3d(nr, nc, np, ValueType::DOUBLE, mr);
         return;
     }
     if (!isHeap())
