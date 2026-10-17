@@ -341,6 +341,24 @@ Value Value::stringArray3D(size_t rows, size_t cols, size_t pages, std::pmr::mem
     m.heap_ = h;
     return m;
 }
+Value Value::stringArrayND(const size_t *dims, int nd, std::pmr::memory_resource *mr)
+{
+    if (!mr) mr = std::pmr::get_default_resource();
+    if (nd <= 0) return stringArray(0, 0, mr);
+    if (nd == 1) return stringArray(dims[0], 1, mr);
+    if (nd == 2) return stringArray(dims[0], dims[1], mr);
+    if (nd == 3) return stringArray3D(dims[0], dims[1], dims[2], mr);
+    Value m;
+    auto *h = new HeapObject();
+    h->type = ValueType::STRING;
+    h->dims = Dims(dims, nd);
+    h->mr = mr;
+    size_t total = 1;
+    for (int i = 0; i < nd; ++i) total *= dims[i];
+    h->cellData = new std::pmr::vector<Value>(total, Value::fromString("", mr), mr);
+    m.heap_ = h;
+    return m;
+}
 const std::string &Value::stringElem(size_t i) const
 {
     static const std::string empty;

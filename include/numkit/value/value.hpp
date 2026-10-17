@@ -294,6 +294,7 @@ public:
     static Value stringScalar(const std::string &s, std::pmr::memory_resource *mr = nullptr);
     static Value stringArray(size_t rows, size_t cols, std::pmr::memory_resource *mr = nullptr);
     static Value stringArray3D(size_t rows, size_t cols, size_t pages, std::pmr::memory_resource *mr = nullptr);
+    static Value stringArrayND(const size_t *dims, int nd, std::pmr::memory_resource *mr = nullptr);
 
     // ���─ String accessors ────────────────────────────────────
     const std::string &stringElem(size_t i) const;
