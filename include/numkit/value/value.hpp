@@ -572,19 +572,25 @@ public:
     }
     void setScalarFast(double v)
     {
+        if (isHeap())
+            releaseHeap();
         scalar_ = v;
         heap_ = nullptr;
-    } // caller guarantees no heap to release
+    }
 
     // Fast logical set for VM comparison fast-path — tag-based, zero allocation
     void setLogicalFast(bool v)
     {
+        if (isHeap())
+            releaseHeap();
         scalar_ = 0.0;
         heap_ = v ? logicalTrueTag() : logicalFalseTag();
-    } // caller guarantees no heap to release
+    }
 
     // Fast check: is this a logical scalar (tag-based)?
     bool isLogicalScalar() const { return heap_ == logicalTrueTag() || heap_ == logicalFalseTag(); }
+    bool isLogicalTrue() const { return heap_ == logicalTrueTag(); }
+    bool isLogicalFalse() const { return heap_ == logicalFalseTag(); }
 
     // Fast scalar value for both double and logical scalars
     // Caller must ensure isDoubleScalar() || isLogicalScalar()
@@ -599,7 +605,7 @@ public:
     // ── Ultra-fast VM hot-path accessors ─────────────────────
     // Caller must ensure isHeap() && type == DOUBLE.
     // Bypasses all safety checks and detach() for sole-owner arrays.
-    bool isHeapDouble() const { return heap_ != nullptr && !isTag() && heap_->type == ValueType::DOUBLE; }
+    bool isHeapDouble() const { return isHeap() && heap_->type == ValueType::DOUBLE; }
 
     const Dims &heapDims() const { return heap_->dims; }
 
@@ -608,7 +614,7 @@ public:
     // paths that want to mutate in-place iff they're the sole owner.
     int heapRefCount() const
     {
-        if (heap_ == nullptr || isTag())
+        if (!isHeap())
             return 1;
         return heap_->refCount.load(std::memory_order_relaxed);
     }
@@ -618,7 +624,7 @@ public:
     // output-reuse fast paths.
     bool hasHeap() const
     {
-        return heap_ != nullptr && !isTag();
+        return isHeap();
     }
 
     // Get mutable data pointer — skips detach when refcount == 1 (sole owner).

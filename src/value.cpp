@@ -1474,14 +1474,19 @@ Value Value::indexGet(const size_t *indices, size_t count, std::pmr::memory_reso
     }
 }
 
-// 2D slice: extract sub-matrix at given row/col indices.
+static inline size_t subIdx(const size_t *idx, size_t k) noexcept
+{
+    return idx ? idx[k] : k;
+}
+
+// 2D slice: extract sub-matrix at given row/col indices (nullptr = full 0..n-1).
 Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
                           const size_t *colIdx, size_t ncols,
                           std::pmr::memory_resource *mr) const
 {
     // Scalar shortcut for non-CELL types
     if (nrows == 1 && ncols == 1 && type() != ValueType::CELL) {
-        size_t idx = dims().sub2ind(rowIdx[0], colIdx[0]);
+        size_t idx = dims().sub2ind(subIdx(rowIdx, 0), subIdx(colIdx, 0));
         return narrowComplex(elemAt(idx, mr), mr);
     }
 
@@ -1492,7 +1497,7 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
         auto result = Value::cell(nrows, ncols);
         for (size_t c = 0; c < ncols; ++c)
             for (size_t r = 0; r < nrows; ++r)
-                result.cellAt(c * nrows + r) = cellAt(d.sub2ind(rowIdx[r], colIdx[c]));
+                result.cellAt(c * nrows + r) = cellAt(d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c)));
         return result;
     }
     if (t == ValueType::STRING) {
@@ -1505,7 +1510,7 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
         for (size_t c = 0; c < ncols; ++c)
             for (size_t r = 0; r < nrows; ++r)
                 result.stringElemSet(c * nrows + r,
-                                      stringElem(d.sub2ind(rowIdx[r], colIdx[c])));
+                                      stringElem(d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c))));
         return result;
     }
     if (t == ValueType::OBJECT) {
@@ -1513,7 +1518,7 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
         std::vector<size_t> src(nrows * ncols);
         for (size_t c = 0; c < ncols; ++c)
             for (size_t r = 0; r < nrows; ++r)
-                src[c * nrows + r] = d.sub2ind(rowIdx[r], colIdx[c]);
+                src[c * nrows + r] = d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c));
         return objectGather(src.data(), Dims(nrows, ncols), mr);
     }
 
@@ -1525,16 +1530,57 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
     auto &d = dims();
     auto result = Value::matrix(nrows, ncols, t, mr);
     result.setSingleComplex(isSingleComplex());
+    if (nrows == 0 || ncols == 0)
+        return result;
+
     const char *src = static_cast<const char *>(rawData());
     char *dst = static_cast<char *>(result.rawDataMut());
-    for (size_t c = 0; c < ncols; ++c)
+    const size_t srcRows = d.rows();
+
+    // Contiguous full-matrix or column-slice fast path when all rows are selected
+    if (rowIdx == nullptr && nrows == srcRows) {
+        if (colIdx == nullptr && ncols == d.cols()) {
+            std::memcpy(dst, src, nrows * ncols * es);
+        } else {
+            const size_t colBytes = nrows * es;
+            for (size_t c = 0; c < ncols; ++c) {
+                const size_t sc = subIdx(colIdx, c);
+                std::memcpy(dst + c * colBytes, src + d.sub2ind(0, sc) * es, colBytes);
+            }
+        }
+        return narrowComplex(std::move(result), mr);
+    }
+
+    // Typed double fast path (avoids per-element memcpy call overhead)
+    if (t == ValueType::DOUBLE) {
+        const double *s = doubleData();
+        double *out = result.doubleDataMut();
+        if (nrows == 1 && colIdx == nullptr) {
+            const size_t r0 = subIdx(rowIdx, 0);
+            const double *sr = s + r0;
+            for (size_t c = 0; c < ncols; ++c)
+                out[c] = sr[c * srcRows];
+        } else {
+            for (size_t c = 0; c < ncols; ++c) {
+                const double *sc = s + subIdx(colIdx, c) * srcRows;
+                double *dc = out + c * nrows;
+                for (size_t r = 0; r < nrows; ++r)
+                    dc[r] = sc[subIdx(rowIdx, r)];
+            }
+        }
+        return result;
+    }
+
+    for (size_t c = 0; c < ncols; ++c) {
+        const size_t sc = subIdx(colIdx, c);
         for (size_t r = 0; r < nrows; ++r)
             std::memcpy(dst + (c * nrows + r) * es,
-                        src + d.sub2ind(rowIdx[r], colIdx[c]) * es, es);
+                        src + d.sub2ind(subIdx(rowIdx, r), sc) * es, es);
+    }
     return narrowComplex(std::move(result), mr);   // all-real complex slice -> real
 }
 
-// 3D slice: extract sub-array at given row/col/page indices.
+// 3D slice: extract sub-array at given row/col/page indices (nullptr = full 0..n-1).
 Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
                           const size_t *colIdx, size_t ncols,
                           const size_t *pageIdx, size_t npages,
@@ -1542,7 +1588,7 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
 {
     // Scalar shortcut for non-CELL types
     if (nrows == 1 && ncols == 1 && npages == 1 && type() != ValueType::CELL) {
-        size_t idx = dims().sub2ind(rowIdx[0], colIdx[0], pageIdx[0]);
+        size_t idx = dims().sub2ind(subIdx(rowIdx, 0), subIdx(colIdx, 0), subIdx(pageIdx, 0));
         return narrowComplex(elemAt(idx, mr), mr);
     }
 
@@ -1563,7 +1609,7 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
             for (size_t c = 0; c < ncols; ++c)
                 for (size_t r = 0; r < nrows; ++r)
                     result.cellAt(rd.sub2ind(r, c, p)) =
-                        cellAt(d.sub2ind(rowIdx[r], colIdx[c], pageIdx[p]));
+                        cellAt(d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c), subIdx(pageIdx, p)));
         return result;
     }
     if (t == ValueType::OBJECT) {
@@ -1574,7 +1620,7 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
             for (size_t c = 0; c < ncols; ++c)
                 for (size_t r = 0; r < nrows; ++r)
                     src[rd.sub2ind(r, c, p)] =
-                        d.sub2ind(rowIdx[r], colIdx[c], pageIdx[p]);
+                        d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c), subIdx(pageIdx, p));
         Dims resD = squeezePage ? Dims(nrows, ncols) : Dims(nrows, ncols, npages);
         return objectGather(src.data(), resD, mr);
     }
@@ -1588,14 +1634,44 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
     auto result = squeezePage ? Value::matrix(nrows, ncols, t, mr)
                               : Value::matrix3d(nrows, ncols, npages, t, mr);
     result.setSingleComplex(isSingleComplex());
+    if (nrows == 0 || ncols == 0 || npages == 0)
+        return result;
+
     const char *src = static_cast<const char *>(rawData());
     char *dst = static_cast<char *>(result.rawDataMut());
+
+    // Contiguous page or column-fiber fast paths when all rows are selected
+    if (rowIdx == nullptr && nrows == d.rows()) {
+        if (colIdx == nullptr && ncols == d.cols()) {
+            const size_t pageBytes = nrows * ncols * es;
+            for (size_t p = 0; p < npages; ++p) {
+                const size_t sp = subIdx(pageIdx, p);
+                std::memcpy(dst + p * pageBytes, src + d.sub2ind(0, 0, sp) * es, pageBytes);
+            }
+        } else {
+            const size_t colBytes = nrows * es;
+            for (size_t p = 0; p < npages; ++p) {
+                const size_t sp = subIdx(pageIdx, p);
+                for (size_t c = 0; c < ncols; ++c) {
+                    const size_t sc = subIdx(colIdx, c);
+                    std::memcpy(dst + (p * ncols + c) * colBytes,
+                                src + d.sub2ind(0, sc, sp) * es, colBytes);
+                }
+            }
+        }
+        return narrowComplex(std::move(result), mr);
+    }
+
     Dims rd(nrows, ncols, npages);
-    for (size_t p = 0; p < npages; ++p)
-        for (size_t c = 0; c < ncols; ++c)
+    for (size_t p = 0; p < npages; ++p) {
+        const size_t sp = subIdx(pageIdx, p);
+        for (size_t c = 0; c < ncols; ++c) {
+            const size_t sc = subIdx(colIdx, c);
             for (size_t r = 0; r < nrows; ++r)
                 std::memcpy(dst + rd.sub2ind(r, c, p) * es,
-                            src + d.sub2ind(rowIdx[r], colIdx[c], pageIdx[p]) * es, es);
+                            src + d.sub2ind(subIdx(rowIdx, r), sc, sp) * es, es);
+        }
+    }
     return narrowComplex(std::move(result), mr);   // all-real complex slice -> real
 }
 
@@ -2025,18 +2101,58 @@ void Value::indexSet2D(const size_t *rowIdx, size_t nrows,
         promoteToComplex();
     auto &d = dims();
     if (val.isScalar()) {
+        if (type() == ValueType::DOUBLE && !val.isComplex() && nrows > 0 && ncols > 0) {
+            double *dst = doubleDataMut();
+            const double sv = val.toScalar();
+            const size_t dstRows = d.rows();
+            for (size_t c = 0; c < ncols; ++c) {
+                double *dc = dst + subIdx(colIdx, c) * dstRows;
+                if (rowIdx == nullptr) {
+                    std::fill_n(dc, nrows, sv);
+                } else {
+                    for (size_t r = 0; r < nrows; ++r)
+                        dc[rowIdx[r]] = sv;
+                }
+            }
+            return;
+        }
         for (size_t c = 0; c < ncols; ++c)
             for (size_t r = 0; r < nrows; ++r)
-                writeScalar(*this, d.sub2ind(rowIdx[r], colIdx[c]), val);
+                writeScalar(*this, d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c)), val);
     } else {
         size_t total = nrows * ncols;
         if (total != val.numel())
             throw std::runtime_error(
                 "Unable to perform assignment because the left and right sides have a different number of elements");
+        if (total == 0)
+            return;
+        if (type() == ValueType::DOUBLE && val.type() == ValueType::DOUBLE && !val.isComplex()) {
+            double *dst = doubleDataMut();
+            const double *src = val.doubleData();
+            const size_t dstRows = d.rows();
+            if (rowIdx == nullptr && nrows == dstRows && colIdx == nullptr && ncols == d.cols()) {
+                std::memcpy(dst, src, total * sizeof(double));
+                return;
+            }
+            if (rowIdx == nullptr) {
+                for (size_t c = 0; c < ncols; ++c)
+                    std::memcpy(dst + subIdx(colIdx, c) * dstRows,
+                                src + c * nrows,
+                                nrows * sizeof(double));
+                return;
+            }
+            size_t k = 0;
+            for (size_t c = 0; c < ncols; ++c) {
+                double *dc = dst + subIdx(colIdx, c) * dstRows;
+                for (size_t r = 0; r < nrows; ++r)
+                    dc[rowIdx[r]] = src[k++];
+            }
+            return;
+        }
         size_t k = 0;
         for (size_t c = 0; c < ncols; ++c)
             for (size_t r = 0; r < nrows; ++r)
-                writeElem(*this, d.sub2ind(rowIdx[r], colIdx[c]), val, k++);
+                writeElem(*this, d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c)), val, k++);
     }
 }
 
@@ -2049,20 +2165,71 @@ void Value::indexSet3D(const size_t *rowIdx, size_t nrows,
         promoteToComplex();
     auto &d = dims();
     if (val.isScalar()) {
+        if (type() == ValueType::DOUBLE && !val.isComplex() && nrows > 0 && ncols > 0 && npages > 0) {
+            double *dst = doubleDataMut();
+            const double sv = val.toScalar();
+            for (size_t p = 0; p < npages; ++p) {
+                const size_t sp = subIdx(pageIdx, p);
+                for (size_t c = 0; c < ncols; ++c) {
+                    double *dc = dst + d.sub2ind(0, subIdx(colIdx, c), sp);
+                    if (rowIdx == nullptr) {
+                        std::fill_n(dc, nrows, sv);
+                    } else {
+                        for (size_t r = 0; r < nrows; ++r)
+                            dc[rowIdx[r]] = sv;
+                    }
+                }
+            }
+            return;
+        }
         for (size_t p = 0; p < npages; ++p)
             for (size_t c = 0; c < ncols; ++c)
                 for (size_t r = 0; r < nrows; ++r)
-                    writeScalar(*this, d.sub2ind(rowIdx[r], colIdx[c], pageIdx[p]), val);
+                    writeScalar(*this, d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c), subIdx(pageIdx, p)), val);
     } else {
         size_t total = nrows * ncols * npages;
         if (total != val.numel())
             throw std::runtime_error(
                 "Unable to perform assignment because the left and right sides have a different number of elements");
+        if (total == 0)
+            return;
+        if (type() == ValueType::DOUBLE && val.type() == ValueType::DOUBLE && !val.isComplex()) {
+            double *dst = doubleDataMut();
+            const double *src = val.doubleData();
+            if (rowIdx == nullptr && nrows == d.rows() && colIdx == nullptr && ncols == d.cols()) {
+                const size_t pageElems = nrows * ncols;
+                for (size_t p = 0; p < npages; ++p)
+                    std::memcpy(dst + d.sub2ind(0, 0, subIdx(pageIdx, p)),
+                                src + p * pageElems,
+                                pageElems * sizeof(double));
+                return;
+            }
+            if (rowIdx == nullptr) {
+                for (size_t p = 0; p < npages; ++p) {
+                    const size_t sp = subIdx(pageIdx, p);
+                    for (size_t c = 0; c < ncols; ++c)
+                        std::memcpy(dst + d.sub2ind(0, subIdx(colIdx, c), sp),
+                                    src + (p * ncols + c) * nrows,
+                                    nrows * sizeof(double));
+                }
+                return;
+            }
+            size_t k = 0;
+            for (size_t p = 0; p < npages; ++p) {
+                const size_t sp = subIdx(pageIdx, p);
+                for (size_t c = 0; c < ncols; ++c) {
+                    double *dc = dst + d.sub2ind(0, subIdx(colIdx, c), sp);
+                    for (size_t r = 0; r < nrows; ++r)
+                        dc[rowIdx[r]] = src[k++];
+                }
+            }
+            return;
+        }
         size_t k = 0;
         for (size_t p = 0; p < npages; ++p)
             for (size_t c = 0; c < ncols; ++c)
                 for (size_t r = 0; r < nrows; ++r)
-                    writeElem(*this, d.sub2ind(rowIdx[r], colIdx[c], pageIdx[p]), val, k++);
+                    writeElem(*this, d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c), subIdx(pageIdx, p)), val, k++);
     }
 }
 
