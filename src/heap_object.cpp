@@ -28,6 +28,7 @@ HeapObject *HeapObject::clone() const
     h->type = type;
     h->dims = dims;
     h->mr = mr;
+    h->isSingleComplex = isSingleComplex;
     // pmr containers require a non-null memory_resource. For matrix /
     // scalar / etc. cellData/structData are null and `mr` may be null
     // (legacy "engine-free" paths); for cell/struct/string the factory

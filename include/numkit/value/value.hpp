@@ -314,6 +314,8 @@ public:
     // True only for variables explicitly removed via 'clear'.
     bool isDeleted() const { return heap_ == deletedTag(); }
     bool isComplex() const;
+    bool isSingleComplex() const;
+    void setSingleComplex(bool v);
     bool isLogical() const;
     bool isChar() const;
     bool isCell() const;

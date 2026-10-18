@@ -560,6 +560,7 @@ Value Value::colonRangeTyped(double start, double step, double stop,
 static ValueType promoteNumericType(const Value *elems, size_t count)
 {
     bool hasDouble = false;
+    bool hasSingle = false;
     bool hasComplex = false;
     bool hasInt = false;
     ValueType firstInt = ValueType::DOUBLE;
@@ -574,6 +575,9 @@ static ValueType promoteNumericType(const Value *elems, size_t count)
         switch (t) {
         case ValueType::COMPLEX:
             hasComplex = true;
+            break;
+        case ValueType::SINGLE:
+            hasSingle = true;
             break;
         case ValueType::DOUBLE:
             hasDouble = true;
@@ -590,6 +594,8 @@ static ValueType promoteNumericType(const Value *elems, size_t count)
         return firstInt;          // integer class dominates (cast the rest)
     if (hasComplex)
         return ValueType::COMPLEX;
+    if (hasSingle)
+        return ValueType::SINGLE;
     if (hasDouble)
         return ValueType::DOUBLE;
     return ValueType::LOGICAL; // all-logical stays logical
@@ -1058,9 +1064,15 @@ Value Value::horzcat(const Value *elems, size_t count, std::pmr::memory_resource
     // end — the elemAsDouble copy path already reads every operand class.
     const bool intOut = isIntegerType(outType);
     const ValueType workType = intOut ? ValueType::DOUBLE : outType;
+    bool anySingle = false;
+    for (size_t i = 0; i < count; ++i)
+        if (!elems[i].isEmpty() && (elems[i].type() == ValueType::SINGLE || elems[i].isSingleComplex()))
+            anySingle = true;
 
     auto result = (pages > 1) ? Value::matrix3d(rows, totalCols, pages, workType, mr)
                               : Value::matrix(rows, totalCols, workType, mr);
+    if (workType == ValueType::COMPLEX && anySingle)
+        result.setSingleComplex(true);
 
     size_t colOff = 0;
     for (size_t i = 0; i < count; ++i) {
@@ -1072,6 +1084,9 @@ Value Value::horzcat(const Value *elems, size_t count, std::pmr::memory_resource
         if (workType == ValueType::COMPLEX)
             copyBlock(result.complexDataMut(), rows, totalCols,
                       elems[i], eR, eC, eP, 0, colOff, pages, readElemAsComplex);
+        else if (workType == ValueType::SINGLE)
+            copyBlock(result.singleDataMut(), rows, totalCols,
+                      elems[i], eR, eC, eP, 0, colOff, pages, [](const Value &v, size_t i) { return static_cast<float>(v.elemAsDouble(i)); });
         else if (workType == ValueType::LOGICAL)
             copyBlock(result.logicalDataMut(), rows, totalCols,
                       elems[i], eR, eC, eP, 0, colOff, pages, readElemAsLogical);
@@ -1225,9 +1240,15 @@ Value Value::vertcat(const Value *elems, size_t count, std::pmr::memory_resource
     // Integer output computed in DOUBLE then cast (round+saturate) — see horzcat.
     const bool intOut = isIntegerType(outType);
     const ValueType workType = intOut ? ValueType::DOUBLE : outType;
+    bool anySingle = false;
+    for (size_t i = 0; i < count; ++i)
+        if (!elems[i].isEmpty() && (elems[i].type() == ValueType::SINGLE || elems[i].isSingleComplex()))
+            anySingle = true;
 
     auto result = (pages > 1) ? Value::matrix3d(totalRows, cols, pages, workType, mr)
                               : Value::matrix(totalRows, cols, workType, mr);
+    if (workType == ValueType::COMPLEX && anySingle)
+        result.setSingleComplex(true);
 
     size_t rowOff = 0;
     for (size_t i = 0; i < count; ++i) {
@@ -1239,6 +1260,9 @@ Value Value::vertcat(const Value *elems, size_t count, std::pmr::memory_resource
         if (workType == ValueType::COMPLEX)
             copyBlock(result.complexDataMut(), totalRows, cols,
                       elems[i], eR, eC, eP, rowOff, 0, pages, readElemAsComplex);
+        else if (workType == ValueType::SINGLE)
+            copyBlock(result.singleDataMut(), totalRows, cols,
+                      elems[i], eR, eC, eP, rowOff, 0, pages, [](const Value &v, size_t i) { return static_cast<float>(v.elemAsDouble(i)); });
         else if (workType == ValueType::LOGICAL)
             copyBlock(result.logicalDataMut(), totalRows, cols,
                       elems[i], eR, eC, eP, rowOff, 0, pages, readElemAsLogical);
@@ -1261,10 +1285,13 @@ Value Value::elemAt(size_t idx, std::pmr::memory_resource *mr) const
     switch (t) {
     case ValueType::DOUBLE:
         return Value::scalar(doubleData()[idx], mr);
-    case ValueType::COMPLEX:
+    case ValueType::COMPLEX: {
         // A complex element whose imaginary part is zero narrows to real (MATLAB
         // isreal(z(k)) per element). Covers VM/TW scalar-index fast paths too.
-        return narrowComplex(Value::complexScalar(complexData()[idx], mr), mr);
+        Value s = Value::complexScalar(complexData()[idx], mr);
+        s.setSingleComplex(isSingleComplex());
+        return narrowComplex(std::move(s), mr);
+    }
     case ValueType::LOGICAL:
         return Value::logicalScalar(logicalData()[idx] != 0, mr);
     case ValueType::CHAR: {
@@ -1331,6 +1358,7 @@ Value Value::reshape(size_t rows, size_t cols, std::pmr::memory_resource *mr) co
         return r;
     }
     Value r = Value::matrix(rows, cols, type(), mr);  // numel>1 -> heap-backed
+    r.setSingleComplex(isSingleComplex());
     if (rawBytes() > 0)
         std::memcpy(r.rawDataMut(), rawData(), rawBytes());
     return r;
@@ -1350,6 +1378,12 @@ Value narrowComplex(Value v, std::pmr::memory_resource *mr)
     const int nd = dm.ndim();
     size_t dimsBuf[Dims::kMaxRank];
     for (int i = 0; i < nd; ++i) dimsBuf[i] = dm.dim(i);
+    if (v.isSingleComplex()) {
+        Value r = Value::matrixND(dimsBuf, nd, ValueType::SINGLE, mr);
+        float *o = r.singleDataMut();
+        for (size_t i = 0; i < n; ++i) o[i] = static_cast<float>(d[i].real());
+        return r;
+    }
     Value r = Value::matrixND(dimsBuf, nd, ValueType::DOUBLE, mr);
     double *o = r.doubleDataMut();
     for (size_t i = 0; i < n; ++i) o[i] = d[i].real();
@@ -1382,6 +1416,7 @@ Value Value::indexGet(const size_t *indices, size_t count, std::pmr::memory_reso
     }
     case ValueType::COMPLEX: {
         auto result = Value::complexMatrix(rr, cc, mr);
+        result.setSingleComplex(isSingleComplex());
         Complex *dst = result.complexDataMut();
         const Complex *src = complexData();
         for (size_t i = 0; i < count; ++i)
@@ -1489,6 +1524,7 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
 
     auto &d = dims();
     auto result = Value::matrix(nrows, ncols, t, mr);
+    result.setSingleComplex(isSingleComplex());
     const char *src = static_cast<const char *>(rawData());
     char *dst = static_cast<char *>(result.rawDataMut());
     for (size_t c = 0; c < ncols; ++c)
@@ -1551,6 +1587,7 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
     auto &d = dims();
     auto result = squeezePage ? Value::matrix(nrows, ncols, t, mr)
                               : Value::matrix3d(nrows, ncols, npages, t, mr);
+    result.setSingleComplex(isSingleComplex());
     const char *src = static_cast<const char *>(rawData());
     char *dst = static_cast<char *>(result.rawDataMut());
     Dims rd(nrows, ncols, npages);
@@ -1596,9 +1633,11 @@ Value Value::indexGetND(const size_t *const *perDimIdx,
     int outNd = nd;
     while (outNd > 2 && perDimCount[outNd - 1] == 1) --outNd;
     Value result;
-    if (!isObj)
+    if (!isObj) {
         result = isCell ? Value::cellND(perDimCount, outNd)
                         : Value::matrixND(perDimCount, outNd, t, mr);
+        result.setSingleComplex(isSingleComplex());
+    }
     if (totalOut == 0)
         return isObj ? objectGather(nullptr, Dims(perDimCount, outNd), mr) : result;
 
@@ -1703,6 +1742,7 @@ Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, std::pmr::memory_
     }
     case ValueType::COMPLEX: {
         auto result = Value::complexMatrix(rr, cc, mr);
+        result.setSingleComplex(isSingleComplex());
         Complex *dst = result.complexDataMut();
         const Complex *src = complexData();
         size_t k = 0;
@@ -1954,16 +1994,16 @@ static void writeScalar(Value &dst, size_t idx, const Value &val)
 
 void Value::elemSet(size_t idx, const Value &val)
 {
-    // Promote double→complex if assigning complex value
-    if (type() == ValueType::DOUBLE && val.isComplex())
+    // Promote double/single→complex if assigning complex value
+    if ((type() == ValueType::DOUBLE || type() == ValueType::SINGLE) && val.isComplex())
         promoteToComplex();
     writeScalar(*this, idx, val);
 }
 
 void Value::indexSet(const size_t *indices, size_t count, const Value &val)
 {
-    // Promote double→complex if assigning complex value
-    if (type() == ValueType::DOUBLE && val.isComplex())
+    // Promote double/single→complex if assigning complex value
+    if ((type() == ValueType::DOUBLE || type() == ValueType::SINGLE) && val.isComplex())
         promoteToComplex();
     if (val.isScalar()) {
         for (size_t k = 0; k < count; ++k)
@@ -1981,7 +2021,7 @@ void Value::indexSet2D(const size_t *rowIdx, size_t nrows,
                         const size_t *colIdx, size_t ncols,
                         const Value &val)
 {
-    if (type() == ValueType::DOUBLE && val.isComplex())
+    if ((type() == ValueType::DOUBLE || type() == ValueType::SINGLE) && val.isComplex())
         promoteToComplex();
     auto &d = dims();
     if (val.isScalar()) {
@@ -2005,7 +2045,7 @@ void Value::indexSet3D(const size_t *rowIdx, size_t nrows,
                         const size_t *pageIdx, size_t npages,
                         const Value &val)
 {
-    if (type() == ValueType::DOUBLE && val.isComplex())
+    if ((type() == ValueType::DOUBLE || type() == ValueType::SINGLE) && val.isComplex())
         promoteToComplex();
     auto &d = dims();
     if (val.isScalar()) {
@@ -2048,7 +2088,7 @@ void Value::indexSetND(const size_t *const *perDimIdx,
     // CELL is handled element-wise via writeScalar/writeElem (which use
     // cellAt under the hood) — no special-casing needed here past the
     // shared scalar/elementwise loops below.
-    if (type() == ValueType::DOUBLE && val.isComplex())
+    if ((type() == ValueType::DOUBLE || type() == ValueType::SINGLE) && val.isComplex())
         promoteToComplex();
 
     constexpr int kMaxNd = Dims::kMaxRank;
@@ -2164,8 +2204,10 @@ void Value::indexDelete(const size_t *indices, size_t count, std::pmr::memory_re
     }
 
     size_t es = elementSize(t);
+    const bool sc = isSingleComplex();
     auto result = isRow ? Value::matrix(1, remaining, t, mr)
                         : Value::matrix(remaining, 1, t, mr);
+    result.setSingleComplex(sc);
     if (remaining > 0 && es > 0) {
         const char *src = static_cast<const char *>(rawData());
         char *dst = static_cast<char *>(result.rawDataMut());
@@ -2192,6 +2234,7 @@ void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
             std::string("Delete indexing not supported for type '") + mtypeName(t) + "'");
 
     size_t R = dims().rows(), C = dims().cols();
+    const bool sc = isSingleComplex();
 
     if (ncols == C) {
         // Delete rows
@@ -2224,6 +2267,7 @@ void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
         } else {
             size_t es = elementSize(t);
             auto result = Value::matrix(newR, C, t, mr);
+            result.setSingleComplex(sc);
             if (newR > 0 && es > 0) {
                 const char *src = static_cast<const char *>(rawData());
                 char *dst = static_cast<char *>(result.rawDataMut());
@@ -2269,6 +2313,7 @@ void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
         } else {
             size_t es = elementSize(t);
             auto result = Value::matrix(R, newC, t, mr);
+            result.setSingleComplex(sc);
             if (newC > 0 && es > 0) {
                 const char *src = static_cast<const char *>(rawData());
                 char *dst = static_cast<char *>(result.rawDataMut());
@@ -2303,6 +2348,7 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
             std::string("Delete indexing not supported for type '") + mtypeName(t) + "'");
 
     size_t R = dims().rows(), C = dims().cols(), P = dims().pages();
+    const bool sc = isSingleComplex();
 
     // Exactly one dimension must be a proper subset; the other two must be fully selected
     bool fullR = (nrows == R), fullC = (ncols == C), fullP = (npages == P);
@@ -2334,6 +2380,7 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
         } else {
             size_t es = elementSize(t);
             auto result = Value::matrix3d(R, C, newP, t, mr);
+            result.setSingleComplex(sc);
             size_t sliceBytes = R * C * es;
             const char *src = static_cast<const char *>(rawData());
             char *dst = static_cast<char *>(result.rawDataMut());
@@ -2367,6 +2414,7 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
         } else {
             size_t es = elementSize(t);
             auto result = Value::matrix3d(newR, C, P, t, mr);
+            result.setSingleComplex(sc);
             const char *src = static_cast<const char *>(rawData());
             char *dst = static_cast<char *>(result.rawDataMut());
             for (size_t p = 0; p < P; ++p) {
@@ -2406,6 +2454,7 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
         } else {
             size_t es = elementSize(t);
             auto result = Value::matrix3d(R, newC, P, t, mr);
+            result.setSingleComplex(sc);
             const char *src = static_cast<const char *>(rawData());
             char *dst = static_cast<char *>(result.rawDataMut());
             for (size_t p = 0; p < P; ++p) {
@@ -2489,8 +2538,10 @@ void Value::indexDeleteND(const size_t *const *perDimIdx,
         throw std::runtime_error(
             std::string("indexDeleteND not supported for type '") + mtypeName(t) + "'");
 
+    const bool sc = isSingleComplex();
     Value result = isCell ? Value::cellND(newShape, srcNd)
                            : Value::matrixND(newShape, srcNd, t, mr);
+    result.setSingleComplex(sc);
     if (newLen == 0) {
         *this = std::move(result);
         return;
@@ -2602,6 +2653,17 @@ bool Value::isNumeric() const
 bool Value::isComplex() const
 {
     return type() == ValueType::COMPLEX;
+}
+bool Value::isSingleComplex() const
+{
+    return isHeap() && heap_->type == ValueType::COMPLEX && heap_->isSingleComplex;
+}
+void Value::setSingleComplex(bool v)
+{
+    if (isHeap() && heap_->type == ValueType::COMPLEX) {
+        detach();
+        heap_->isSingleComplex = v;
+    }
 }
 bool Value::isLogical() const
 {
@@ -3282,8 +3344,8 @@ void Value::promoteToComplex(std::pmr::memory_resource *mr)
     ValueType t = type();
     if (t == ValueType::COMPLEX)
         return;
-    if (t != ValueType::DOUBLE)
-        throw std::runtime_error("Can only promote double to complex");
+    if (t != ValueType::DOUBLE && t != ValueType::SINGLE)
+        throw std::runtime_error("Can only promote double or single to complex");
     size_t n = numel();
     if (heap_ == nullptr) {
         double v = scalar_;
@@ -3298,14 +3360,22 @@ void Value::promoteToComplex(std::pmr::memory_resource *mr)
     auto *newBuf = new DataBuffer(n * sizeof(Complex), mr);
     Complex *dst = static_cast<Complex *>(newBuf->data());
     if (n > 0 && heap_->buffer) {
-        const double *src = static_cast<const double *>(heap_->buffer->data());
-        for (size_t i = 0; i < n; ++i)
-            dst[i] = Complex(src[i], 0.0);
+        if (t == ValueType::SINGLE) {
+            const float *src = static_cast<const float *>(heap_->buffer->data());
+            for (size_t i = 0; i < n; ++i)
+                dst[i] = Complex(static_cast<double>(src[i]), 0.0);
+        } else {
+            const double *src = static_cast<const double *>(heap_->buffer->data());
+            for (size_t i = 0; i < n; ++i)
+                dst[i] = Complex(src[i], 0.0);
+        }
     }
     if (heap_->buffer && heap_->buffer->release())
         delete heap_->buffer;
     heap_->buffer = newBuf;
     heap_->type = ValueType::COMPLEX;
+    if (t == ValueType::SINGLE)
+        heap_->isSingleComplex = true;
 }
 
 double Value::operator()(size_t i) const

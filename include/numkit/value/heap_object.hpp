@@ -69,6 +69,7 @@ struct HeapObject
     std::string *objClass = nullptr;
     std::vector<std::shared_ptr<ObjectState>> objStates;
     bool objIsHandle = false;
+    bool isSingleComplex = false;
 
     // Capacity for appendScalar amortization
     size_t appendCapacity = 0;
