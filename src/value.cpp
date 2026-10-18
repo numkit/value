@@ -1570,6 +1570,22 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
         }
         return result;
     }
+    if (t == ValueType::COMPLEX) {
+        const Complex *s = complexData();
+        Complex *out = result.complexDataMut();
+        bool anyImag = false;
+        for (size_t c = 0; c < ncols; ++c) {
+            const Complex *sc = s + subIdx(colIdx, c) * srcRows;
+            Complex *dc = out + c * nrows;
+            for (size_t r = 0; r < nrows; ++r) {
+                Complex v = sc[subIdx(rowIdx, r)];
+                dc[r] = v;
+                if (v.imag() != 0.0)
+                    anyImag = true;
+            }
+        }
+        return anyImag ? result : narrowComplex(std::move(result), mr);
+    }
 
     for (size_t c = 0; c < ncols; ++c) {
         const size_t sc = subIdx(colIdx, c);
@@ -2116,6 +2132,21 @@ void Value::indexSet2D(const size_t *rowIdx, size_t nrows,
             }
             return;
         }
+        if (type() == ValueType::COMPLEX && nrows > 0 && ncols > 0) {
+            Complex *dst = complexDataMut();
+            const Complex sv = val.toComplex();
+            const size_t dstRows = d.rows();
+            for (size_t c = 0; c < ncols; ++c) {
+                Complex *dc = dst + subIdx(colIdx, c) * dstRows;
+                if (rowIdx == nullptr) {
+                    std::fill_n(dc, nrows, sv);
+                } else {
+                    for (size_t r = 0; r < nrows; ++r)
+                        dc[rowIdx[r]] = sv;
+                }
+            }
+            return;
+        }
         for (size_t c = 0; c < ncols; ++c)
             for (size_t r = 0; r < nrows; ++r)
                 writeScalar(*this, d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c)), val);
@@ -2144,6 +2175,29 @@ void Value::indexSet2D(const size_t *rowIdx, size_t nrows,
             size_t k = 0;
             for (size_t c = 0; c < ncols; ++c) {
                 double *dc = dst + subIdx(colIdx, c) * dstRows;
+                for (size_t r = 0; r < nrows; ++r)
+                    dc[rowIdx[r]] = src[k++];
+            }
+            return;
+        }
+        if (type() == ValueType::COMPLEX && val.type() == ValueType::COMPLEX) {
+            Complex *dst = complexDataMut();
+            const Complex *src = val.complexData();
+            const size_t dstRows = d.rows();
+            if (rowIdx == nullptr && nrows == dstRows && colIdx == nullptr && ncols == d.cols()) {
+                std::memcpy(dst, src, total * sizeof(Complex));
+                return;
+            }
+            if (rowIdx == nullptr) {
+                for (size_t c = 0; c < ncols; ++c)
+                    std::memcpy(dst + subIdx(colIdx, c) * dstRows,
+                                src + c * nrows,
+                                nrows * sizeof(Complex));
+                return;
+            }
+            size_t k = 0;
+            for (size_t c = 0; c < ncols; ++c) {
+                Complex *dc = dst + subIdx(colIdx, c) * dstRows;
                 for (size_t r = 0; r < nrows; ++r)
                     dc[rowIdx[r]] = src[k++];
             }
@@ -2219,6 +2273,38 @@ void Value::indexSet3D(const size_t *rowIdx, size_t nrows,
                 const size_t sp = subIdx(pageIdx, p);
                 for (size_t c = 0; c < ncols; ++c) {
                     double *dc = dst + d.sub2ind(0, subIdx(colIdx, c), sp);
+                    for (size_t r = 0; r < nrows; ++r)
+                        dc[rowIdx[r]] = src[k++];
+                }
+            }
+            return;
+        }
+        if (type() == ValueType::COMPLEX && val.type() == ValueType::COMPLEX) {
+            Complex *dst = complexDataMut();
+            const Complex *src = val.complexData();
+            if (rowIdx == nullptr && nrows == d.rows() && colIdx == nullptr && ncols == d.cols()) {
+                const size_t pageElems = nrows * ncols;
+                for (size_t p = 0; p < npages; ++p)
+                    std::memcpy(dst + d.sub2ind(0, 0, subIdx(pageIdx, p)),
+                                src + p * pageElems,
+                                pageElems * sizeof(Complex));
+                return;
+            }
+            if (rowIdx == nullptr) {
+                for (size_t p = 0; p < npages; ++p) {
+                    const size_t sp = subIdx(pageIdx, p);
+                    for (size_t c = 0; c < ncols; ++c)
+                        std::memcpy(dst + d.sub2ind(0, subIdx(colIdx, c), sp),
+                                    src + (p * ncols + c) * nrows,
+                                    nrows * sizeof(Complex));
+                }
+                return;
+            }
+            size_t k = 0;
+            for (size_t p = 0; p < npages; ++p) {
+                const size_t sp = subIdx(pageIdx, p);
+                for (size_t c = 0; c < ncols; ++c) {
+                    Complex *dc = dst + d.sub2ind(0, subIdx(colIdx, c), sp);
                     for (size_t r = 0; r < nrows; ++r)
                         dc[rowIdx[r]] = src[k++];
                 }
