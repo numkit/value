@@ -868,8 +868,15 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
             handle = elems[i].objectIsHandle();
             found = true;
         } else if (elems[i].objectClassName() != clsName) {
-            throw std::runtime_error(
-                "Cannot concatenate objects of different classes");
+            auto isGraphicsCls = [](const std::string &c) {
+                return c.rfind("matlab.graphics.", 0) == 0 || c.rfind("matlab.ui.", 0) == 0;
+            };
+            if (isGraphicsCls(clsName) && isGraphicsCls(elems[i].objectClassName())) {
+                clsName = "matlab.graphics.Graphics";
+            } else {
+                throw std::runtime_error(
+                    "Cannot concatenate objects of different classes");
+            }
         }
     }
     auto *h = new HeapObject();
@@ -3061,7 +3068,14 @@ Value Value::objectConcatN(const Value *parts, size_t count, const Dims &outDims
             handle = parts[i].objectIsHandle();
             found = true;
         } else if (parts[i].objectClassName() != clsName) {
-            throw std::runtime_error("Cannot concatenate objects of different classes");
+            auto isGraphicsCls = [](const std::string &c) {
+                return c.rfind("matlab.graphics.", 0) == 0 || c.rfind("matlab.ui.", 0) == 0;
+            };
+            if (isGraphicsCls(clsName) && isGraphicsCls(parts[i].objectClassName())) {
+                clsName = "matlab.graphics.Graphics";
+            } else {
+                throw std::runtime_error("Cannot concatenate objects of different classes");
+            }
         }
     }
     auto *h = new HeapObject();
