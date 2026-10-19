@@ -984,12 +984,23 @@ Value Value::horzcat(const Value *elems, size_t count, std::pmr::memory_resource
         }
 
     if (hasChar) {
+        size_t rows = 0, totalCols = 0;
+        bool rowsSet = false, multiRow = false, sameRows = true;
+        for (size_t i = 0; i < count; ++i) {
+            if (elems[i].isEmpty()) continue;
+            size_t eR = elems[i].dims().rows();
+            size_t eC = elems[i].dims().cols();
+            if (eR > 1) multiRow = true;
+            if (!rowsSet) { rows = eR; rowsSet = true; }
+            else if (rows != eR) sameRows = false;
+            totalCols += eC;
+        }
         std::string result;
         for (size_t i = 0; i < count; ++i) {
             if (elems[i].isEmpty())
                 continue;
             if (elems[i].type() == ValueType::CHAR) {
-                result += elems[i].toString();
+                result.append(elems[i].charData(), elems[i].numel());
             } else if (elems[i].isScalar()) {
                 result += static_cast<char>(static_cast<int>(std::round(elems[i].toScalar())));
             } else {
@@ -998,6 +1009,11 @@ Value Value::horzcat(const Value *elems, size_t count, std::pmr::memory_resource
                 for (size_t k = 0; k < elems[i].numel(); ++k)
                     result += static_cast<char>(static_cast<int>(std::round(d[k])));
             }
+        }
+        if (multiRow && sameRows && rows > 1 && rows * totalCols == result.size()) {
+            Value out = Value::matrix(rows, totalCols, ValueType::CHAR, mr);
+            std::memcpy(out.charDataMut(), result.data(), result.size());
+            return out;
         }
         return Value::fromString(result, mr);
     }
@@ -1040,24 +1056,28 @@ Value Value::horzcat(const Value *elems, size_t count, std::pmr::memory_resource
     }
 
     // Collect dimensions
-    size_t totalCols = 0, rows = 0, pages = 1;
+    size_t totalCols = 0, emptyCols = 0, rows = 0, pages = 1;
     bool rowsSet = false, pagesSet = false;
 
     for (size_t i = 0; i < count; ++i) {
         size_t eR, eC, eP;
         getElemDims(elems[i], eR, eC, eP);
-        totalCols += eC;
         if (elems[i].isEmpty()) {
             // Mirror of the vertcat empty rule (probed R2025b): empties
             // add 0 columns and participate with MAX height —
             // [zeros(0,2), zeros(0,2)] is 0x4, [zeros(3,0), 5] is 3x1.
-            rows = std::max(rows, eR);
+            emptyCols += eC;
+            if (!rowsSet)
+                rows = std::max(rows, eR);
             pages = std::max(pages, eP);
         } else {
+            totalCols += eC;
             matchDim(rows, eR, rowsSet);
             matchDim(pages, eP, pagesSet);
         }
     }
+    if (!rowsSet)
+        totalCols += emptyCols;
     if (totalCols == 0) {
         // All-empty concat returns a PROPER empty (never an unset Value —
         // the old fallthrough left the assignment target unbound).
@@ -1122,7 +1142,7 @@ Value Value::vertcat(const Value *elems, size_t count, std::pmr::memory_resource
         if (elems[i].isStruct())
             return concatStructs(elems, count, /*vertical=*/true, mr);
 
-    size_t totalRows = 0, cols = 0, pages = 1;
+    size_t totalRows = 0, emptyRows = 0, cols = 0, pages = 1;
     bool colsSet = false, pagesSet = false;
     bool hasCell = false;
 
@@ -1131,7 +1151,6 @@ Value Value::vertcat(const Value *elems, size_t count, std::pmr::memory_resource
             hasCell = true;
         size_t eR, eC, eP;
         getElemDims(elems[i], eR, eC, eP);
-        totalRows += eR;
         if (elems[i].isEmpty()) {
             // MATLAB (probed R2025b): empties contribute 0 rows and
             // participate with MAX width — [zeros(0,1); zeros(0,3)] is a
@@ -1139,13 +1158,18 @@ Value Value::vertcat(const Value *elems, size_t count, std::pmr::memory_resource
             // entirely, so an all-empty concat fell through to an UNSET
             // Value() that never bound its assignment target
             // (bugs/closed/lang/vertcat-all-empty).
-            cols = std::max(cols, eC);
+            emptyRows += eR;
+            if (!colsSet)
+                cols = std::max(cols, eC);
             pages = std::max(pages, eP);
         } else {
+            totalRows += eR;
             matchDim(cols, eC, colsSet);
             matchDim(pages, eP, pagesSet);
         }
     }
+    if (!colsSet)
+        totalRows += emptyRows;
     if (totalRows == 0) {
         // All-empty concat returns a PROPER empty, never an unset Value.
         if (hasCell)
@@ -1322,6 +1346,8 @@ Value Value::elemAt(size_t idx, std::pmr::memory_resource *mr) const
         // size-1 array we copy element[0]'s fields into a new struct so
         // mutation paths (`s(1).x = ...`) operate on a fresh map.
         Value out = Value::structure(mr);
+        if (heap_->fieldOrder && out.heap_->fieldOrder)
+            *out.heap_->fieldOrder = *heap_->fieldOrder;
         const auto &src = (*heap_->structArray)[idx];
         auto &dst = (*out.heap_->structArray)[0];
         for (const auto &[k, v] : src)
@@ -1355,6 +1381,16 @@ Value Value::reshape(size_t rows, size_t cols, std::pmr::memory_resource *mr) co
         return *this;  // 1x1 reshape is a no-op (matrix(1,1,DOUBLE) is inline, no buffer)
     if (isObject())
         return objectReshape(Dims(rows, cols), mr);
+    if (type() == ValueType::STRUCT) {
+        Value r = Value::structArray(rows, cols, mr);
+        if (heap_->fieldOrder && r.heap_->fieldOrder)
+            *r.heap_->fieldOrder = *heap_->fieldOrder;
+        const auto &src = *heap_->structArray;
+        auto &dst = *r.heap_->structArray;
+        for (size_t i = 0; i < src.size() && i < dst.size(); ++i)
+            dst[i] = src[i];
+        return r;
+    }
     if (type() == ValueType::CELL || type() == ValueType::STRING) {
         Value r = (type() == ValueType::CELL) ? Value::cell(rows, cols)
                                               : Value::stringArray(rows, cols);
@@ -1463,6 +1499,18 @@ Value Value::indexGet(const size_t *indices, size_t count, std::pmr::memory_reso
             result.stringElemSet(i, stringElem(indices[i]));
         return result;
     }
+    case ValueType::STRUCT: {
+        auto result = Value::structArray(rr, cc, mr);
+        if (heap_->fieldOrder && result.heap_->fieldOrder)
+            *result.heap_->fieldOrder = *heap_->fieldOrder;
+        for (size_t i = 0; i < count; ++i) {
+            const auto &src = (*heap_->structArray)[indices[i]];
+            auto &dst = (*result.heap_->structArray)[i];
+            for (const auto &[k, v] : src)
+                dst.emplace(k, v);
+        }
+        return result;
+    }
     // Typed integer / single: raw memcpy per element, same target type.
     case ValueType::INT8: case ValueType::INT16: case ValueType::INT32: case ValueType::INT64:
     case ValueType::UINT8: case ValueType::UINT16: case ValueType::UINT32: case ValueType::UINT64:
@@ -1520,6 +1568,21 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
                                       stringElem(d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c))));
         return result;
     }
+    if (t == ValueType::STRUCT) {
+        auto &d = dims();
+        auto result = Value::structArray(nrows, ncols, mr);
+        if (heap_->fieldOrder && result.heap_->fieldOrder)
+            *result.heap_->fieldOrder = *heap_->fieldOrder;
+        for (size_t c = 0; c < ncols; ++c) {
+            for (size_t r = 0; r < nrows; ++r) {
+                const auto &src = (*heap_->structArray)[d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c))];
+                auto &dst = (*result.heap_->structArray)[c * nrows + r];
+                for (const auto &[k, v] : src)
+                    dst.emplace(k, v);
+            }
+        }
+        return result;
+    }
     if (t == ValueType::OBJECT) {
         auto &d = dims();
         std::vector<size_t> src(nrows * ncols);
@@ -1546,7 +1609,7 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
 
     // Contiguous full-matrix or column-slice fast path when all rows are selected
     if (rowIdx == nullptr && nrows == srcRows) {
-        if (colIdx == nullptr && ncols == d.cols()) {
+        if (colIdx == nullptr && ncols == (srcRows > 0 ? d.numel() / srcRows : d.cols())) {
             std::memcpy(dst, src, nrows * ncols * es);
         } else {
             const size_t colBytes = nrows * es;
@@ -4180,6 +4243,11 @@ void Value::growStructArrayTo(size_t idx, std::pmr::memory_resource *mr)
     // lose it (e.g. struct array element appended via s(end+1).f = v).
     if (heap_ && heap_->fieldOrder && grown.heap_ && grown.heap_->fieldOrder) {
         *grown.heap_->fieldOrder = *heap_->fieldOrder;
+        for (size_t k = 0; k < grown.numel(); ++k) {
+            auto &dst = (*grown.heap_->structArray)[k];
+            for (const auto &fn : *grown.heap_->fieldOrder)
+                dst.try_emplace(fn, Value());
+        }
     }
     *this = std::move(grown);
 }
@@ -4262,8 +4330,14 @@ size_t Value::growStructArrayND(const size_t *coords, int nd,
         for (const auto &[kn, vv] : src)
             dst.emplace(kn, vv);
     }
-    if (heap_ && heap_->fieldOrder && grown.heap_ && grown.heap_->fieldOrder)
+    if (heap_ && heap_->fieldOrder && grown.heap_ && grown.heap_->fieldOrder) {
         *grown.heap_->fieldOrder = *heap_->fieldOrder;
+        for (size_t k = 0; k < newTotal; ++k) {
+            auto &dst = (*grown.heap_->structArray)[k];
+            for (const auto &fn : *grown.heap_->fieldOrder)
+                dst.try_emplace(fn, Value());
+        }
+    }
     *this = std::move(grown);
     return linearIn(need);
 }
@@ -4379,6 +4453,12 @@ void Value::setField(size_t linearIdx, const std::string &name, const Value &v)
     detach();
     // After detach heap_ may differ; re-fetch via heap_.
     appendIfNew(heap_->fieldOrder, name);
+    if (heap_->structArray->size() > 1) {
+        for (size_t k = 0; k < heap_->structArray->size(); ++k) {
+            if (k != linearIdx)
+                (*heap_->structArray)[k].try_emplace(name, Value());
+        }
+    }
     (*heap_->structArray)[linearIdx][name] = v;
 }
 
