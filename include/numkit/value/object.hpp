@@ -32,6 +32,10 @@ struct NativePayload
 {
     virtual ~NativePayload() = default;
     virtual std::shared_ptr<NativePayload> clone() const = 0;
+    virtual double asDouble() const
+    {
+        throw std::runtime_error("Cannot read element as double from type 'object'");
+    }
 };
 
 // ============================================================

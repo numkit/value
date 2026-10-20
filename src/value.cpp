@@ -656,6 +656,14 @@ double Value::elemAsDouble(size_t idx) const
     case ValueType::UINT16:  return static_cast<double>(uint16Data()[idx]);
     case ValueType::UINT32:  return static_cast<double>(uint32Data()[idx]);
     case ValueType::UINT64:  return static_cast<double>(uint64Data()[idx]);
+    case ValueType::OBJECT: {
+        const auto *st = objectStateAt(idx);
+        if (st && st->native)
+            return st->native->asDouble();
+        throw std::runtime_error(
+            std::string("Cannot read element as double from type '")
+            + mtypeName(type()) + "'");
+    }
     default:
         throw std::runtime_error(
             std::string("Cannot read element as double from type '")
@@ -1501,8 +1509,14 @@ Value Value::indexGet(const size_t *indices, size_t count, std::pmr::memory_reso
     }
     case ValueType::STRUCT: {
         auto result = Value::structArray(rr, cc, mr);
-        if (heap_->fieldOrder && result.heap_->fieldOrder)
-            *result.heap_->fieldOrder = *heap_->fieldOrder;
+        if (result.heap_->fieldOrder) {
+            if (heap_->fieldOrder && !heap_->fieldOrder->empty()) {
+                *result.heap_->fieldOrder = *heap_->fieldOrder;
+            } else {
+                auto fnms = fieldNamesInOrder();
+                result.heap_->fieldOrder->assign(fnms.begin(), fnms.end());
+            }
+        }
         for (size_t i = 0; i < count; ++i) {
             const auto &src = (*heap_->structArray)[indices[i]];
             auto &dst = (*result.heap_->structArray)[i];
@@ -1571,8 +1585,14 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
     if (t == ValueType::STRUCT) {
         auto &d = dims();
         auto result = Value::structArray(nrows, ncols, mr);
-        if (heap_->fieldOrder && result.heap_->fieldOrder)
-            *result.heap_->fieldOrder = *heap_->fieldOrder;
+        if (result.heap_->fieldOrder) {
+            if (heap_->fieldOrder && !heap_->fieldOrder->empty()) {
+                *result.heap_->fieldOrder = *heap_->fieldOrder;
+            } else {
+                auto fnms = fieldNamesInOrder();
+                result.heap_->fieldOrder->assign(fnms.begin(), fnms.end());
+            }
+        }
         for (size_t c = 0; c < ncols; ++c) {
             for (size_t r = 0; r < nrows; ++r) {
                 const auto &src = (*heap_->structArray)[d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c))];
@@ -1948,6 +1968,35 @@ Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, std::pmr::memory_
             if (mask[i])
                 result.stringElemSet(k++, stringElem(i));
         return result;
+    }
+    case ValueType::STRUCT: {
+        auto result = Value::structArray(rr, cc, mr);
+        if (result.heap_->fieldOrder) {
+            if (heap_->fieldOrder && !heap_->fieldOrder->empty()) {
+                *result.heap_->fieldOrder = *heap_->fieldOrder;
+            } else {
+                auto fnms = fieldNamesInOrder();
+                result.heap_->fieldOrder->assign(fnms.begin(), fnms.end());
+            }
+        }
+        size_t k = 0;
+        for (size_t i = 0; i < n; ++i) {
+            if (mask[i]) {
+                const auto &src = (*heap_->structArray)[i];
+                auto &dst = (*result.heap_->structArray)[k++];
+                for (const auto &[key, val] : src)
+                    dst.emplace(key, val);
+            }
+        }
+        return result;
+    }
+    case ValueType::OBJECT: {
+        std::vector<size_t> sel;
+        sel.reserve(rr * cc);
+        for (size_t i = 0; i < n; ++i)
+            if (mask[i])
+                sel.push_back(i);
+        return objectGather(sel.data(), Dims(rr, cc), mr);
     }
     // Typed integer / single: raw memcpy per selected element.
     case ValueType::INT8: case ValueType::INT16: case ValueType::INT32: case ValueType::INT64:
@@ -4185,9 +4234,15 @@ const Value &Value::field(const std::string &n) const
 }
 bool Value::hasField(const std::string &n) const
 {
-    if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray
-        || heap_->structArray->empty())
+    if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         return false;
+    if (heap_->structArray->empty()) {
+        if (heap_->fieldOrder) {
+            for (const auto &f : *heap_->fieldOrder)
+                if (f == n) return true;
+        }
+        return false;
+    }
     return (*heap_->structArray)[0].count(n) > 0;
 }
 std::pmr::map<std::string, Value> &Value::structFields()
