@@ -3146,8 +3146,9 @@ Value Value::objectSubArray(const std::vector<size_t> &idxs,
 {
     if (!isObject())
         return Value();
-    // 1-D linear selection: one index → 1×1 scalar; several → 1×N row.
-    Dims d = (idxs.size() == 1) ? Dims(1, 1) : Dims(size_t{1}, idxs.size());
+    bool colResult = (dims().cols() == 1 && dims().rows() > 1);
+    Dims d = (idxs.size() == 1) ? Dims(1, 1)
+           : (colResult ? Dims(idxs.size(), size_t{1}) : Dims(size_t{1}, idxs.size()));
     return objectGather(idxs.data(), d, mr);
 }
 
@@ -3474,6 +3475,11 @@ double Value::toScalar() const
         return 1.0;
     if (heap_ == logicalFalseTag())
         return 0.0;
+    if (isHeap() && heap_->type == ValueType::OBJECT && heap_->dims.isScalar()) {
+        const auto *st = objectStateConst();
+        if (st && st->native)
+            return st->native->asDouble();
+    }
     if (!isHeap() || !heap_->buffer)
         throw std::runtime_error("Cannot convert " + std::string(mtypeName(type())) + " to scalar");
     auto *h = heap_;
@@ -3508,6 +3514,11 @@ double Value::toScalar() const
         return (double) *static_cast<const uint32_t *>(h->buffer->data());
     if (h->type == ValueType::UINT64 && h->dims.isScalar())
         return (double) *static_cast<const uint64_t *>(h->buffer->data());
+    if (h->type == ValueType::OBJECT && h->dims.isScalar()) {
+        const auto *st = objectStateConst();
+        if (st && st->native)
+            return st->native->asDouble();
+    }
     throw std::runtime_error("Cannot convert " + std::string(mtypeName(type())) + " to scalar");
 }
 bool Value::toBool() const
