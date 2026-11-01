@@ -553,6 +553,12 @@ public:
     std::string funcHandleSource() const;
     /// Attach the anonymous-function source text to a freshly-created handle.
     void setFuncHandleSource(const std::string &source);
+    /// Number of captured values attached to a closure function handle (0 for non-closures).
+    size_t funcHandleCaptureCount() const;
+    /// Access the i-th captured value of a closure function handle.
+    const Value &funcHandleCapture(size_t i) const;
+    /// Attach captured values to a function handle (detaching COW if shared).
+    void setFuncHandleCaptures(const Value *captures, size_t count);
 
     // ── Debug ────────────────────────────────────────────────
     std::string debugString() const;

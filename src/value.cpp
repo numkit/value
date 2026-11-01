@@ -3636,6 +3636,31 @@ void Value::setFuncHandleSource(const std::string &source)
     delete heap_->funcSource;
     heap_->funcSource = new std::string(source);
 }
+size_t Value::funcHandleCaptureCount() const
+{
+    if (isHeap() && heap_->type == ValueType::FUNC_HANDLE && heap_->cellData)
+        return heap_->cellData->size();
+    return 0;
+}
+const Value &Value::funcHandleCapture(size_t i) const
+{
+    if (!isHeap() || heap_->type != ValueType::FUNC_HANDLE || !heap_->cellData
+        || i >= heap_->cellData->size())
+        throw std::runtime_error("funcHandleCapture: index out of range");
+    return (*heap_->cellData)[i];
+}
+void Value::setFuncHandleCaptures(const Value *captures, size_t count)
+{
+    if (!isHeap() || heap_->type != ValueType::FUNC_HANDLE)
+        return;
+    detach();
+    delete heap_->cellData;
+    heap_->cellData = nullptr;
+    if (count > 0 && captures) {
+        auto *cmr = heap_->mr ? heap_->mr : std::pmr::get_default_resource();
+        heap_->cellData = new std::pmr::vector<Value>(captures, captures + count, cmr);
+    }
+}
 
 const Complex *Value::complexData() const
 {
