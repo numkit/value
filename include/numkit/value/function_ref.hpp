@@ -1,4 +1,4 @@
-// core/include/nk/value/function_ref.hpp
+// core/include/numkit/value/function_ref.hpp
 //
 // numkit::function_ref<Sig> — lightweight, non-owning callable view.
 //

@@ -1,4 +1,4 @@
-// core/include/nk/value/fn_handle.hpp
+// core/include/numkit/value/fn_handle.hpp
 //
 // numkit::FnHandle — the canonical MATLAB-style callback type used by
 // the numerical-library API for any function that takes a

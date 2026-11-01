@@ -1,4 +1,4 @@
-// core/include/nk/value/scratch.hpp
+// core/include/numkit/value/scratch.hpp
 //
 // nk memory layer — two thin classes over std::pmr.
 //

@@ -1,4 +1,4 @@
-// include/nk/value/object.hpp
+// include/numkit/value/object.hpp
 //
 // Engine object model — see object_model.md. A class instance is a
 // ValueType::OBJECT heap value carrying a class name + shared

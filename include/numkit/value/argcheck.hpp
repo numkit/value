@@ -1,7 +1,7 @@
-// value/include/nk/value/argcheck.hpp
+// value/include/numkit/value/argcheck.hpp
 //
 // numkit::argcheck — engine-free argument-validation primitives with
-// nk-voiced diagnostics.
+// numkit-voiced diagnostics.
 //
 // Part of the explicit argcheck separation (dev-docs/todo/
 // argcheck_separation.md): reg adapters marshal, compute kernels
@@ -12,7 +12,7 @@
 //   * WHICH inputs are rejected (and which argument gets blamed) is
 //     validated against the reference engine — same inputs must fail
 //     with the same error class (behavior parity, full_fidelity.md);
-//   * the STRINGS are ours: identifiers use the nk:<fn>:<tag>
+//   * the STRINGS are ours: identifiers use the numkit:<fn>:<tag>
 //     namespace, messages are more detailed than the reference's
 //     (function, argument, expectation, and the received value/shape).
 //     The reference's name or version never appears in shipped strings
@@ -327,7 +327,7 @@ inline void expectedFlag01(double v, int argNum, std::string_view argName,
 // The dominant count/order family (k, order, window, span, level, N …):
 // positive integer. Integer-ness fires first, so 2.5 reports NotInteger
 // and -3 reports NotPositive — same rejection classes as the reference's
-// "must be a positive integer", split into richer nk-voiced diagnostics.
+// "must be a positive integer", split into richer numkit-voiced diagnostics.
 inline int expectedPositiveInteger(double v, int argNum, std::string_view argName,
                                    std::string_view fn)
 {

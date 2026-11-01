@@ -1,4 +1,4 @@
-// value/include/nk/value/error.hpp
+// value/include/numkit/value/error.hpp
 //
 // numkit::Error — the runtime error type carrying an optional source
 // location (line/col/function/context) and a MATLAB-style identifier.
