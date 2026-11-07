@@ -865,17 +865,45 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
     std::string clsName;
     bool found = false;
     bool handle = false;
+    const NativePayload *protoNative = nullptr;
+    for (size_t i = 0; i < count; ++i) {
+        if (!elems[i].isEmpty() && elems[i].isObject()) {
+            clsName = elems[i].objectClassName();
+            handle = elems[i].objectIsHandle();
+            if (const ObjectState *st = elems[i].objectStateConst())
+                protoNative = st->native.get();
+            found = true;
+            break;
+        }
+    }
+    const bool canPromoteNumeric =
+        protoNative && (protoNative->fromScalarDouble(0.0) != nullptr);
+
+    std::vector<Value> promotedStorage;
+    promotedStorage.reserve(count);
+    std::vector<const Value *> ops;
+    ops.reserve(count);
+
     for (size_t i = 0; i < count; ++i) {
         if (elems[i].isEmpty())
             continue;
-        if (!elems[i].isObject())
+        if (!elems[i].isObject()) {
+            if (canPromoteNumeric && (elems[i].isNumeric() || elems[i].isLogical())) {
+                const size_t n = elems[i].numel();
+                std::vector<std::shared_ptr<ObjectState>> states(n);
+                for (size_t k = 0; k < n; ++k) {
+                    auto st = std::make_shared<ObjectState>(mr);
+                    st->native = protoNative->fromScalarDouble(elems[i].elemAt(k).toScalar());
+                    states[k] = std::move(st);
+                }
+                promotedStorage.push_back(
+                    Value::objectArray(clsName, elems[i].dims(), std::move(states), handle, mr));
+                continue;
+            }
             throw std::runtime_error(
                 "Cannot concatenate an object with a non-object value");
-        if (!found) {
-            clsName = elems[i].objectClassName();
-            handle = elems[i].objectIsHandle();
-            found = true;
-        } else if (elems[i].objectClassName() != clsName) {
+        }
+        if (elems[i].objectClassName() != clsName) {
             auto isGraphicsCls = [](const std::string &c) {
                 return c.rfind("matlab.graphics.", 0) == 0 || c.rfind("matlab.ui.", 0) == 0;
             };
@@ -896,10 +924,15 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
         h->objStates.push_back((handle || !st) ? st : st->deepCopy(mr));
     };
     // Gather the non-empty object operands (column-major storage + dims).
-    std::vector<const Value *> ops;
-    for (size_t i = 0; i < count; ++i)
+    size_t promIdx = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (elems[i].isEmpty())
+            continue;
         if (elems[i].isObject())
             ops.push_back(&elems[i]);
+        else
+            ops.push_back(&promotedStorage[promIdx++]);
+    }
 
     if (!vertical) {
         // horzcat: operands share #rows; result is R×(Σcols). Column-major

@@ -36,6 +36,11 @@ struct NativePayload
     {
         throw std::runtime_error("Cannot read element as double from type 'object'");
     }
+    virtual std::shared_ptr<NativePayload> fromScalarDouble(double v) const
+    {
+        (void)v;
+        return nullptr;
+    }
 };
 
 // ============================================================
