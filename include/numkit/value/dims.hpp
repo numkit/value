@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <numkit/value/index.hpp>
+
 namespace numkit {
 
 // ============================================================
@@ -35,9 +37,9 @@ struct Dims
     static constexpr int kMaxRank   = 32;
 
     Dims();
-    Dims(size_t r, size_t c);
-    Dims(size_t r, size_t c, size_t p);
-    Dims(const size_t *dims, int nd);
+    Dims(Size r, Size c);
+    Dims(Size r, Size c, Size p);
+    Dims(const Size *dims, int nd);
 
     Dims(const Dims &o);
     Dims(Dims &&o) noexcept;
@@ -45,13 +47,13 @@ struct Dims
     Dims &operator=(Dims &&o) noexcept;
     ~Dims();
 
-    int    ndims() const noexcept { return nd_; }
-    int    ndim()  const noexcept { return nd_; }
-    size_t rows()  const noexcept { return inline_[0]; }
-    size_t cols()  const noexcept { return inline_[1]; }
-    size_t pages() const noexcept { return inline_[2]; }
+    int  ndims() const noexcept { return nd_; }
+    int  ndim()  const noexcept { return nd_; }
+    Size rows()  const noexcept { return inline_[0]; }
+    Size cols()  const noexcept { return inline_[1]; }
+    Size pages() const noexcept { return inline_[2]; }
 
-    size_t dim(int i) const noexcept
+    Size dim(int i) const noexcept
     {
         if (i < 0)             return 1;
         if (i < kInlineCap)    return inline_[i];
@@ -59,11 +61,11 @@ struct Dims
         return 1;
     }
 
-    size_t dimSize(int i) const noexcept { return dim(i); }
+    Size dimSize(int i) const noexcept { return dim(i); }
 
-    size_t numel() const noexcept
+    Size numel() const noexcept
     {
-        size_t n = inline_[0] * inline_[1] * inline_[2] * inline_[3];
+        Size n = inline_[0] * inline_[1] * inline_[2] * inline_[3];
         if (heap_) {
             const int extra = nd_ - kInlineCap;
             for (int i = 0; i < extra; ++i)
@@ -80,27 +82,27 @@ struct Dims
     }
     bool is3D() const noexcept { return nd_ == 3 && inline_[2] > 1; }
 
-    size_t sub2ind(size_t r, size_t c) const noexcept
+    Size sub2ind(Size r, Size c) const noexcept
     {
         return c * inline_[0] + r;
     }
-    size_t sub2ind(size_t r, size_t c, size_t p) const noexcept
+    Size sub2ind(Size r, Size c, Size p) const noexcept
     {
         return p * inline_[0] * inline_[1] + c * inline_[0] + r;
     }
-    size_t sub2indChecked(size_t r, size_t c) const;
-    size_t sub2indChecked(size_t r, size_t c, size_t p) const;
+    Size sub2indChecked(Size r, Size c) const;
+    Size sub2indChecked(Size r, Size c, Size p) const;
 
     bool operator==(const Dims &o) const noexcept;
     bool operator!=(const Dims &o) const noexcept { return !(*this == o); }
 
 private:
-    void   setND(const size_t *dims, int nd);
-    void   freeHeap() noexcept;
+    void setND(const Size *dims, int nd);
+    void freeHeap() noexcept;
 
-    size_t   inline_[kInlineCap];
-    size_t  *heap_;
-    uint8_t  nd_;
+    Size    inline_[kInlineCap];
+    Size   *heap_;
+    uint8_t nd_;
 };
 
 } // namespace numkit

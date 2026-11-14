@@ -31,6 +31,7 @@
 #include <string_view>
 
 #include <numkit/value/error.hpp>
+#include <numkit/value/index.hpp>
 #include <numkit/value/span.hpp>
 #include <numkit/value/value.hpp>
 #include <numkit/value/value_type.hpp>   // mtypeName (class got-clauses)
@@ -106,7 +107,7 @@ inline void checkNargin(size_t actual, size_t minArgs, size_t maxArgs,
 
 // Numeric tail — use when the Value-level checks are already done (e.g.
 // looping over the elements of a [m n p] size vector).
-inline size_t arrayDim(double d, std::string_view fn)
+inline Size arrayDim(double d, std::string_view fn)
 {
     if (std::isnan(d) || std::isinf(d))
         detail::fail(std::string(fn) + ": size inputs must be finite (got "
@@ -118,11 +119,12 @@ inline size_t arrayDim(double d, std::string_view fn)
                      fn, "numkit:" + std::string(fn) + ":sizeNotInteger");
     if (d < 0.0)
         return 0;
-    if (d >= static_cast<double>(std::numeric_limits<size_t>::max()))
+    Size out = 0;
+    if (!tryNonNegSize(d, out))
         detail::fail(std::string(fn) + ": requested array size exceeds the "
                      "supported maximum (got " + detail::num(d) + ").",
                      fn, "numkit:" + std::string(fn) + ":sizeTooLarge");
-    return static_cast<size_t>(d);
+    return out;
 }
 
 // Realness guard for a size input of ANY shape (scalar or [m n p]
@@ -178,7 +180,7 @@ inline double reshapeSizeArg(const Value &v, std::string_view fn)
     return v.toScalar();
 }
 
-inline size_t reshapeSize(double d, std::string_view fn)
+inline Size reshapeSize(double d, std::string_view fn)
 {
     if (d < 0.0)
         detail::fail(std::string(fn) + ": size inputs must be non-negative "
@@ -190,11 +192,12 @@ inline size_t reshapeSize(double d, std::string_view fn)
                      fn, "numkit:" + std::string(fn) + ":sizeNotInteger");
     // Cast-safety guard only (the numel-preservation check in reshape
     // catches unrealistic sizes first).
-    if (d >= static_cast<double>(std::numeric_limits<size_t>::max()))
+    Size out = 0;
+    if (!tryNonNegSize(d, out))
         detail::fail(std::string(fn) + ": requested array size exceeds the "
                      "supported maximum (got " + detail::num(d) + ").",
                      fn, "numkit:" + std::string(fn) + ":sizeTooLarge");
-    return static_cast<size_t>(d);
+    return out;
 }
 
 // ============================================================

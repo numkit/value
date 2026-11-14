@@ -2188,19 +2188,13 @@ Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, std::pmr::memory_
 // Index resolution — convert Value index to vector<size_t> (0-based)
 // ============================================================
 
-size_t Value::checkedScalarIndex(double v)
+Size Value::checkedScalarIndex(double v)
 {
-    constexpr double kMaxSafeIdx =
-        (sizeof(size_t) >= 8) ? 9007199254740992.0 : 4294967295.0;
-    if (std::isnan(v) || std::isinf(v) || v < 1.0 || v > kMaxSafeIdx || v != std::floor(v))
+    Size out0 = 0;
+    if (!tryIndex0(v, out0))
         throw std::runtime_error(
             "Array indices must be positive integers or logical values.");
-    return static_cast<size_t>(v) - 1;
-}
-
-static void validateIndex(double v)
-{
-    (void) Value::checkedScalarIndex(v);
+    return out0;
 }
 
 std::vector<size_t> Value::resolveIndices(const Value &idx, size_t dimSize)
@@ -2220,9 +2214,7 @@ std::vector<size_t> Value::resolveIndices(const Value &idx, size_t dimSize)
             if (m[i])
                 out.push_back(i);
     } else if (idx.isDoubleScalar()) {
-        double v = idx.toScalar();
-        validateIndex(v);
-        size_t ii = static_cast<size_t>(v) - 1;
+        Size ii = Value::checkedScalarIndex(idx.toScalar());
         if (ii >= dimSize)
             throw std::runtime_error("Index exceeds array dimensions");
         out.push_back(ii);
@@ -2232,9 +2224,7 @@ std::vector<size_t> Value::resolveIndices(const Value &idx, size_t dimSize)
         // reads each generically (doubleData() throws "Not a double array" for
         // non-DOUBLE index arrays, e.g. A(int32([1 3]))).
         for (size_t i = 0; i < idx.numel(); ++i) {
-            double v = idx.elemAsDouble(i);
-            validateIndex(v);
-            size_t ii = static_cast<size_t>(v) - 1;
+            Size ii = Value::checkedScalarIndex(idx.elemAsDouble(i));
             if (ii >= dimSize)
                 throw std::runtime_error("Index exceeds array dimensions");
             out.push_back(ii);
@@ -2256,17 +2246,12 @@ std::vector<size_t> Value::resolveIndicesUnchecked(const Value &idx)
             if (m[i])
                 out.push_back(i);
     } else if (idx.isDoubleScalar() || idx.isLogicalScalar()) {
-        double v = idx.toScalar();
-        validateIndex(v);
-        out.push_back(static_cast<size_t>(v) - 1);
+        out.push_back(Value::checkedScalarIndex(idx.toScalar()));
     } else {
         // See resolveIndices: integer/single/char index arrays read via the
         // generic elemAsDouble, not the DOUBLE-only doubleData().
-        for (size_t i = 0; i < idx.numel(); ++i) {
-            double v = idx.elemAsDouble(i);
-            validateIndex(v);
-            out.push_back(static_cast<size_t>(v) - 1);
-        }
+        for (size_t i = 0; i < idx.numel(); ++i)
+            out.push_back(Value::checkedScalarIndex(idx.elemAsDouble(i)));
     }
     return out;
 }

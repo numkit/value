@@ -2,9 +2,12 @@
 //
 // Standalone C-ABI tests for `numkit/value` (`numkit_value_c`).
 #include <numkit/value/c_api.h>
+#include <numkit/value/index.hpp>
+#include <numkit/value/value.hpp>
 
 #include <gtest/gtest.h>
 #include <array>
+#include <limits>
 #include <string>
 
 TEST(NumkitValueCApi, ScalarsStringsAndHandleLifecycle)
@@ -71,4 +74,51 @@ TEST(NumkitValueCApi, ZeroCopyViewAllocArrayAndContainers)
     numkit_val_release(owned);
     numkit_val_release(view);
     EXPECT_EQ(numkit_debug_live_values(), base);
+}
+
+namespace {
+constexpr bool checkConstexprIndexGate()
+{
+    numkit::Size idx0 = 99;
+    if (!numkit::tryIndex0(1.0, idx0) || idx0 != 0)
+        return false;
+    if (!numkit::tryIndex0(numkit::kMaxIndexDouble, idx0)
+        || idx0 != numkit::kMaxIndex - 1)
+        return false;
+    if (numkit::tryIndex0(0.0, idx0) || numkit::tryIndex0(-1.0, idx0)
+        || numkit::tryIndex0(1.5, idx0)
+        || numkit::tryIndex0(numkit::kMaxExactDoubleInt, idx0))
+        return false;
+
+    numkit::Size sz = 99;
+    if (!numkit::tryNonNegSize(0.0, sz) || sz != 0)
+        return false;
+    if (!numkit::tryNonNegSize(numkit::kMaxIndexDouble, sz)
+        || sz != numkit::kMaxIndex)
+        return false;
+    if (numkit::tryNonNegSize(-0.5, sz)
+        || numkit::tryNonNegSize(numkit::kMaxExactDoubleInt, sz))
+        return false;
+    return true;
+}
+static_assert(checkConstexprIndexGate(), "numkit::tryIndex0 / tryNonNegSize constexpr check");
+} // namespace
+
+TEST(NumkitValueCApi, CanonicalIndexAndDimBounds)
+{
+    static_assert(std::is_same_v<numkit::Size, std::size_t>);
+    static_assert(std::is_same_v<numkit::Index, std::ptrdiff_t>);
+    EXPECT_LE(numkit::kMaxIndex,
+              static_cast<numkit::Size>(std::numeric_limits<numkit::Index>::max()));
+
+    EXPECT_EQ(numkit::Value::checkedScalarIndex(1.0), numkit::Size{0});
+    EXPECT_EQ(numkit::Value::checkedScalarIndex(numkit::kMaxIndexDouble),
+              numkit::kMaxIndex - 1);
+
+    const double nanv = std::numeric_limits<double>::quiet_NaN();
+    const double infv = std::numeric_limits<double>::infinity();
+    for (double bad : {0.0, -0.0, -1.0, 0.5, 1.5, nanv, infv, -infv,
+                       numkit::kMaxExactDoubleInt, 1e300}) {
+        EXPECT_THROW((void)numkit::Value::checkedScalarIndex(bad), std::runtime_error);
+    }
 }
