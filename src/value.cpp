@@ -610,6 +610,16 @@ Value Value::colonRangeTyped(double start, double step, double stop,
         }
     };
     switch (t) {
+      case ValueType::CHAR: {
+        char *cp = result.charDataMut();
+        for (size_t i = 0; i < count; ++i) {
+            double v = std::floor(start + static_cast<double>(i) * step);
+            if (v < 0.0) v = 0.0;
+            else if (v > 255.0) v = 255.0;
+            cp[i] = static_cast<char>(static_cast<unsigned char>(v));
+        }
+        break;
+      }
       case ValueType::SINGLE:  write_loop(result.singleDataMut(),  float{});    break;
       case ValueType::LOGICAL: write_loop(result.logicalDataMut(), uint8_t{});  break;
       case ValueType::INT8:    write_loop(result.int8DataMut(),    int8_t{});   break;
@@ -3757,10 +3767,15 @@ bool Value::toBool() const
         && (isIntegerType(h->type) || h->type == ValueType::SINGLE
             || h->type == ValueType::CHAR)) {
         size_t n = h->dims.numel();
-        for (size_t i = 0; i < n; ++i)
-            if (elemAsDouble(i) == 0.0)
-                return false;
-        return n > 0;
+        bool hasZero = false;
+        for (size_t i = 0; i < n; ++i) {
+            double v = elemAsDouble(i);
+            if (std::isnan(v))
+                nanErr();
+            if (v == 0.0)
+                hasZero = true;
+        }
+        return n > 0 && !hasZero;
     }
     throw std::runtime_error("Cannot convert " + std::string(mtypeName(type())) + " to bool");
 }
