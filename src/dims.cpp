@@ -42,6 +42,9 @@ Dims::Dims(const size_t *dims, int nd) : heap_(nullptr)
 void Dims::setND(const size_t *dims, int nd)
 {
     if (nd < 1) nd = 1;
+    if (nd > kMaxRank)
+        throw std::runtime_error(
+            "Maximum array dimensionality (" + std::to_string(kMaxRank) + ") exceeded");
     nd_ = static_cast<uint8_t>(nd);
     for (int i = 0; i < kInlineCap; ++i)
         inline_[i] = (i < nd) ? dims[i] : 1;

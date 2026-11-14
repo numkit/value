@@ -262,6 +262,10 @@ inline int dimArg(double d, std::string_view fn)
         detail::fail(std::string(fn) + ": dimension argument must be a "
                      "positive integer (got " + detail::num(d) + ").",
                      fn, "numkit:" + std::string(fn) + ":dimNotPositive");
+    if (d > static_cast<double>(std::numeric_limits<int>::max()))
+        detail::fail(std::string(fn) + ": dimension argument exceeds maximum "
+                     "supported rank (got " + detail::num(d) + ").",
+                     fn, "numkit:" + std::string(fn) + ":dimTooLarge");
     return static_cast<int>(d);
 }
 
@@ -298,6 +302,13 @@ inline int expectedInteger(double v, int argNum, std::string_view argName,
                          "integer (got " + detail::num(v) + ").",
                      fn, "numkit:" + std::string(fn) + ":"
                          + std::string(argName) + "NotInteger");
+    if (v < static_cast<double>(std::numeric_limits<int>::min())
+        || v > static_cast<double>(std::numeric_limits<int>::max()))
+        detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
+                         + " (" + std::string(argName) + ") exceeds integer "
+                         "range (got " + detail::num(v) + ").",
+                     fn, "numkit:" + std::string(fn) + ":"
+                         + std::string(argName) + "OutOfRange");
     return static_cast<int>(v);
 }
 

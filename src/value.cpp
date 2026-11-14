@@ -11,12 +11,91 @@
 
 namespace numkit {
 
+namespace {
 
+inline size_t checkedMulSize(size_t a, size_t b)
+{
+    if (a != 0 && b > std::numeric_limits<size_t>::max() / a)
+        throw std::runtime_error("Maximum variable size allowed by the program is exceeded");
+    return a * b;
+}
 
-HeapObject Value::sEmptyTag;
-HeapObject Value::sLogicalTrue;
-HeapObject Value::sLogicalFalse;
-HeapObject Value::sDeletedTag;
+inline size_t checkedMulDims(const size_t *dims, int nd)
+{
+    size_t total = 1;
+    for (int i = 0; i < nd; ++i)
+        total = checkedMulSize(total, dims[i]);
+    return total;
+}
+
+template <typename T>
+inline T roundSaturateInt(double v) noexcept
+{
+    if (std::isnan(v))
+        return T(0);
+    if constexpr (std::is_unsigned_v<T>) {
+        if (v <= 0.0)
+            return T(0);
+        if constexpr (sizeof(T) >= 8) {
+            constexpr double kMaxU64 = 18446744073709551616.0; // 2^64 (exact in double)
+            if (v >= kMaxU64)
+                return std::numeric_limits<T>::max();
+            const double r = std::round(v);
+            if (r >= kMaxU64)
+                return std::numeric_limits<T>::max();
+            return static_cast<T>(r);
+        } else {
+            constexpr double hi = static_cast<double>(std::numeric_limits<T>::max());
+            if (v >= hi)
+                return std::numeric_limits<T>::max();
+            const double r = std::round(v);
+            if (r >= hi)
+                return std::numeric_limits<T>::max();
+            return static_cast<T>(r);
+        }
+    } else {
+        if constexpr (sizeof(T) >= 8) {
+            constexpr double kMinI64 = -9223372036854775808.0; // -2^63 (exact in double)
+            constexpr double kMaxI64 =  9223372036854775808.0; // +2^63 (exact in double)
+            if (v <= kMinI64)
+                return std::numeric_limits<T>::min();
+            if (v >= kMaxI64)
+                return std::numeric_limits<T>::max();
+            const double r = std::round(v);
+            if (r <= kMinI64)
+                return std::numeric_limits<T>::min();
+            if (r >= kMaxI64)
+                return std::numeric_limits<T>::max();
+            return static_cast<T>(r);
+        } else {
+            constexpr double lo = static_cast<double>(std::numeric_limits<T>::min());
+            constexpr double hi = static_cast<double>(std::numeric_limits<T>::max());
+            if (v <= lo)
+                return std::numeric_limits<T>::min();
+            if (v >= hi)
+                return std::numeric_limits<T>::max();
+            const double r = std::round(v);
+            if (r <= lo)
+                return std::numeric_limits<T>::min();
+            if (r >= hi)
+                return std::numeric_limits<T>::max();
+            return static_cast<T>(r);
+        }
+    }
+}
+
+inline char doubleToCharSafe(double v) noexcept
+{
+    if (std::isnan(v) || v <= 0.0)
+        return static_cast<char>(0);
+    const double r = std::round(v);
+    if (r >= 255.0)
+        return static_cast<char>(static_cast<unsigned char>(255));
+    return static_cast<char>(static_cast<unsigned char>(r));
+}
+
+} // namespace
+
 const Dims Value::sScalarDims{1, 1};
 const Dims Value::sEmptyDims{};
 
@@ -163,32 +242,34 @@ Value Value::matrix(size_t rows, size_t cols, ValueType t, std::pmr::memory_reso
 {
     if (rows == 1 && cols == 1 && t == ValueType::DOUBLE)
         return scalar(0.0, mr);
+    const size_t total = checkedMulSize(rows, cols);
+    const size_t bytes = checkedMulSize(total, elementSize(t));
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = t;
     h->dims = {rows, cols};
     h->mr = mr;
-    size_t bytes = rows * cols * elementSize(t);
     if (bytes > 0) {
         h->buffer = new DataBuffer(bytes, mr);
         std::memset(h->buffer->data(), 0, bytes);
     }
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
 Value Value::matrix3d(size_t rows, size_t cols, size_t pages, ValueType t, std::pmr::memory_resource *mr)
 {
+    const size_t total = checkedMulSize(checkedMulSize(rows, cols), pages);
+    const size_t bytes = checkedMulSize(total, elementSize(t));
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = t;
     h->dims = {rows, cols, pages};
     h->mr = mr;
-    size_t bytes = rows * cols * pages * elementSize(t);
     if (bytes > 0) {
         h->buffer = new DataBuffer(bytes, mr);
         std::memset(h->buffer->data(), 0, bytes);
     }
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
 Value Value::matrixND(const size_t *dims, int nd, ValueType t, std::pmr::memory_resource *mr)
@@ -202,25 +283,25 @@ Value Value::matrixND(const size_t *dims, int nd, ValueType t, std::pmr::memory_
         return matrix3d(dims[0], dims[1], dims[2], t, mr);
     // nd >= 4 — go through the ND Dims ctor. Heap allocation in Dims only
     // kicks in for nd > kInlineCap (4); 4D stays fully inline.
+    Dims newDims(dims, nd);
+    const size_t total = checkedMulDims(dims, nd);
+    const size_t bytes = checkedMulSize(total, elementSize(t));
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = t;
-    h->dims = Dims(dims, nd);
+    h->dims = std::move(newDims);
     h->mr = mr;
-    size_t bytes = elementSize(t);
-    for (int i = 0; i < nd; ++i)
-        bytes *= dims[i];
     if (bytes > 0) {
         h->buffer = new DataBuffer(bytes, mr);
         std::memset(h->buffer->data(), 0, bytes);
     }
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
 Value Value::fromString(const std::string &s, std::pmr::memory_resource *mr)
 {
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::CHAR;
     h->dims = {1, s.size()};
     h->mr = mr;
@@ -228,31 +309,33 @@ Value Value::fromString(const std::string &s, std::pmr::memory_resource *mr)
         h->buffer = new DataBuffer(s.size(), mr);
         std::memcpy(h->buffer->data(), s.data(), s.size());
     }
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
 Value Value::cell(size_t rows, size_t cols, std::pmr::memory_resource *mr)
 {
     if (!mr) mr = std::pmr::get_default_resource();
+    const size_t total = checkedMulSize(rows, cols);
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::CELL;
     h->dims = {rows, cols};
     h->mr = mr;
-    h->cellData = new std::pmr::vector<Value>(rows * cols, mr);
-    m.heap_ = h;
+    h->cellData = new std::pmr::vector<Value>(total, mr);
+    m.heap_ = h.release();
     return m;
 }
 Value Value::cell3D(size_t rows, size_t cols, size_t pages, std::pmr::memory_resource *mr)
 {
     if (!mr) mr = std::pmr::get_default_resource();
+    const size_t total = checkedMulSize(checkedMulSize(rows, cols), pages);
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::CELL;
     h->dims = {rows, cols, pages};
     h->mr = mr;
-    h->cellData = new std::pmr::vector<Value>(rows * cols * pages, mr);
-    m.heap_ = h;
+    h->cellData = new std::pmr::vector<Value>(total, mr);
+    m.heap_ = h.release();
     return m;
 }
 Value Value::cellND(const size_t *dims, int nd, std::pmr::memory_resource *mr)
@@ -262,15 +345,15 @@ Value Value::cellND(const size_t *dims, int nd, std::pmr::memory_resource *mr)
     if (nd == 1) return cell(dims[0], 1, mr);
     if (nd == 2) return cell(dims[0], dims[1], mr);
     if (nd == 3) return cell3D(dims[0], dims[1], dims[2], mr);
+    Dims newDims(dims, nd);
+    const size_t total = checkedMulDims(dims, nd);
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::CELL;
-    h->dims = Dims(dims, nd);
+    h->dims = std::move(newDims);
     h->mr = mr;
-    size_t total = 1;
-    for (int i = 0; i < nd; ++i) total *= dims[i];
     h->cellData = new std::pmr::vector<Value>(total, mr);
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
 Value Value::csl(size_t n, std::pmr::memory_resource *mr)
@@ -318,27 +401,29 @@ Value Value::stringScalar(const std::string &s, std::pmr::memory_resource *mr)
 Value Value::stringArray(size_t rows, size_t cols, std::pmr::memory_resource *mr)
 {
     if (!mr) mr = std::pmr::get_default_resource();
+    const size_t total = checkedMulSize(rows, cols);
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::STRING;
     h->dims = {rows, cols};
     h->mr = mr;
     // Initialize with empty strings
-    h->cellData = new std::pmr::vector<Value>(rows * cols, Value::fromString("", mr), mr);
-    m.heap_ = h;
+    h->cellData = new std::pmr::vector<Value>(total, Value::fromString("", mr), mr);
+    m.heap_ = h.release();
     return m;
 }
 Value Value::stringArray3D(size_t rows, size_t cols, size_t pages, std::pmr::memory_resource *mr)
 {
     if (!mr) mr = std::pmr::get_default_resource();
+    const size_t total = checkedMulSize(checkedMulSize(rows, cols), pages);
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::STRING;
     h->dims = {rows, cols, pages};
     h->mr = mr;
-    h->cellData = new std::pmr::vector<Value>(rows * cols * pages,
+    h->cellData = new std::pmr::vector<Value>(total,
                                                Value::fromString("", mr), mr);
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
 Value Value::stringArrayND(const size_t *dims, int nd, std::pmr::memory_resource *mr)
@@ -348,33 +433,27 @@ Value Value::stringArrayND(const size_t *dims, int nd, std::pmr::memory_resource
     if (nd == 1) return stringArray(dims[0], 1, mr);
     if (nd == 2) return stringArray(dims[0], dims[1], mr);
     if (nd == 3) return stringArray3D(dims[0], dims[1], dims[2], mr);
+    Dims newDims(dims, nd);
+    const size_t total = checkedMulDims(dims, nd);
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::STRING;
-    h->dims = Dims(dims, nd);
+    h->dims = std::move(newDims);
     h->mr = mr;
-    size_t total = 1;
-    for (int i = 0; i < nd; ++i) total *= dims[i];
     h->cellData = new std::pmr::vector<Value>(total, Value::fromString("", mr), mr);
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
-const std::string &Value::stringElem(size_t i) const
+std::string Value::stringElem(size_t i) const
 {
-    static const std::string empty;
-    if (!heap_ || heap_->type != ValueType::STRING || !heap_->cellData || i >= heap_->cellData->size())
-        return empty;
-    // Each element is a CHAR Value — return its string representation cached nowhere,
-    // so we use a thread_local buffer.
-    // Actually, toString() returns by value, so let's store in the cellData as char MValues
-    // and return from a static. Better: just return toString() but that returns by value.
-    // For efficiency, return from a thread-local.
-    thread_local std::string buf;
-    buf = (*heap_->cellData)[i].toString();
-    return buf;
+    if (!isHeap() || heap_->type != ValueType::STRING || !heap_->cellData || i >= heap_->cellData->size())
+        return {};
+    return (*heap_->cellData)[i].toString();
 }
 void Value::stringElemSet(size_t i, const std::string &s)
 {
+    if (!isHeap() || heap_->type != ValueType::STRING || !heap_->cellData)
+        throw std::runtime_error("Not a string array");
     detach();
     if (i >= heap_->cellData->size())
         heap_->cellData->resize(i + 1, Value::fromString("", heap_->mr));
@@ -388,12 +467,12 @@ Value Value::structure(std::pmr::memory_resource *mr)
 Value Value::structArray(size_t rows, size_t cols, std::pmr::memory_resource *mr)
 {
     if (!mr) mr = std::pmr::get_default_resource();
+    const size_t n = checkedMulSize(rows, cols);
     Value m;
-    auto *h = new HeapObject();
+    std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::STRUCT;
     h->dims = {rows, cols};
     h->mr = mr;
-    const size_t n = rows * cols;
     h->structArray =
         new std::pmr::vector<std::pmr::map<std::string, Value>>(mr);
     h->structArray->reserve(n);
@@ -402,7 +481,7 @@ Value Value::structArray(size_t rows, size_t cols, std::pmr::memory_resource *mr
         h->structArray->emplace_back(MapT(mr));
     // BUG #15 fix: insertion-order tracker (parallel to structArray).
     h->fieldOrder = new std::pmr::vector<std::string>(mr);
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
 Value Value::funcHandle(const std::string &name, std::pmr::memory_resource *mr)
@@ -608,19 +687,17 @@ static Value castConcatToInteger(const Value &d, ValueType vt,
                                  std::pmr::memory_resource *mr)
 {
     const auto &dd = d.dims();
-    Value r = dd.is3D() ? Value::matrix3d(dd.rows(), dd.cols(), dd.pages(), vt, mr)
-                        : Value::matrix(dd.rows(), dd.cols(), vt, mr);
+    size_t dBuf[Dims::kMaxRank];
+    const int nd = dd.ndim();
+    for (int i = 0; i < nd; ++i)
+        dBuf[i] = dd.dim(i);
+    Value r = Value::matrixND(dBuf, nd, vt, mr);
     const size_t n = d.numel();
     const double *src = d.doubleData();
     auto fill = [&](auto *dst) {
         using T = std::remove_pointer_t<std::decay_t<decltype(dst)>>;
-        const double lo = static_cast<double>(std::numeric_limits<T>::min());
-        const double hi = static_cast<double>(std::numeric_limits<T>::max());
-        for (size_t i = 0; i < n; ++i) {
-            double v = std::round(src[i]);
-            if (v < lo) v = lo; else if (v > hi) v = hi;
-            dst[i] = static_cast<T>(v);
-        }
+        for (size_t i = 0; i < n; ++i)
+            dst[i] = roundSaturateInt<T>(src[i]);
     };
     switch (vt) {
     case ValueType::INT8:   fill(r.int8DataMut());   break;
@@ -715,7 +792,7 @@ static uint8_t readElemAsLogical(const Value &v, size_t idx)
     }
 }
 
-// Get dimensions for a concat element: rows, cols, pages.
+// Get dimensions for a concat element: rows, cols, outer slice product (axes >= 2).
 // Scalars are treated as 1×1×1.
 static void getElemDims(const Value &v, size_t &r, size_t &c, size_t &p)
 {
@@ -725,7 +802,9 @@ static void getElemDims(const Value &v, size_t &r, size_t &c, size_t &p)
         auto &d = v.dims();
         r = d.rows();
         c = d.cols();
-        p = d.is3D() ? d.pages() : 1;
+        p = 1;
+        for (int k = 2; k < d.ndim(); ++k)
+            p *= d.dim(k);
     }
 }
 
@@ -744,6 +823,30 @@ static void matchDim(size_t &out, size_t elem, bool &set)
         out = elem;
 }
 
+// Validate and compute higher dimensions (axes >= 2) across non-empty concat operands.
+// Returns maxNdim (>= 2) and populates higherDims[2..maxNdim-1].
+static int collectHigherDims(const Value *elems, size_t count, size_t (&higherDims)[Dims::kMaxRank])
+{
+    int maxNd = 2;
+    for (size_t i = 0; i < count; ++i)
+        if (!elems[i].isEmpty())
+            maxNd = std::max(maxNd, elems[i].dims().ndim());
+    if (maxNd > Dims::kMaxRank)
+        throw std::runtime_error("Maximum array dimensionality exceeded");
+    for (int k = 2; k < maxNd; ++k) {
+        size_t dk = 1;
+        bool set = false;
+        for (size_t i = 0; i < count; ++i) {
+            if (elems[i].isEmpty())
+                continue;
+            const size_t ed = elems[i].isScalar() ? 1 : elems[i].dims().dim(k);
+            matchDim(dk, ed, set);
+        }
+        higherDims[k] = dk;
+    }
+    return maxNd;
+}
+
 // Copy elements from source into a column-major destination buffer.
 // Template avoids duplicating the loop structure for double vs Complex.
 template<typename T, typename ReadFunc>
@@ -754,11 +857,13 @@ static void copyBlock(T *dst, size_t dstRows, size_t dstCols,
 {
     size_t dstSlice = dstRows * dstCols;
     size_t srcSlice = srcRows * srcCols;
-    for (size_t p = 0; p < pages; ++p)
+    for (size_t p = 0; p < pages; ++p) {
+        const size_t sp = (srcPages <= 1) ? 0 : p;
         for (size_t c = 0; c < srcCols; ++c)
             for (size_t r = 0; r < srcRows; ++r)
                 dst[(rowOff + r) + (colOff + c) * dstRows + p * dstSlice] =
-                    read(src, r + c * srcRows + p * srcSlice);
+                    read(src, r + c * srcRows + sp * srcSlice);
+    }
 }
 
 // ============================================================
@@ -1127,6 +1232,14 @@ Value Value::horzcat(const Value *elems, size_t count, std::pmr::memory_resource
     // rows can only still be 0 for an ALL-empty concat with columns
     // (e.g. [zeros(0,1), zeros(0,1)] -> 0x2): MATLAB keeps the 0 height.
 
+    size_t outDimsBuf[Dims::kMaxRank] = {0};
+    const int outNd = collectHigherDims(elems, count, outDimsBuf);
+    outDimsBuf[0] = rows;
+    outDimsBuf[1] = totalCols;
+    pages = 1;
+    for (int k = 2; k < outNd; ++k)
+        pages = checkedMulSize(pages, outDimsBuf[k]);
+
     ValueType outType = promoteNumericType(elems, count);
     // Integer output is computed in DOUBLE then cast (round+saturate) at the
     // end — the elemAsDouble copy path already reads every operand class.
@@ -1137,7 +1250,8 @@ Value Value::horzcat(const Value *elems, size_t count, std::pmr::memory_resource
         if (!elems[i].isEmpty() && (elems[i].type() == ValueType::SINGLE || elems[i].isSingleComplex()))
             anySingle = true;
 
-    auto result = (pages > 1) ? Value::matrix3d(rows, totalCols, pages, workType, mr)
+    auto result = (outNd > 3)  ? Value::matrixND(outDimsBuf, outNd, workType, mr)
+                : (pages > 1) ? Value::matrix3d(rows, totalCols, pages, workType, mr)
                               : Value::matrix(rows, totalCols, workType, mr);
     if (workType == ValueType::COMPLEX && anySingle)
         result.setSingleComplex(true);
@@ -1308,6 +1422,14 @@ Value Value::vertcat(const Value *elems, size_t count, std::pmr::memory_resource
         return result;
     }
 
+    size_t outDimsBuf[Dims::kMaxRank] = {0};
+    const int outNd = collectHigherDims(elems, count, outDimsBuf);
+    outDimsBuf[0] = totalRows;
+    outDimsBuf[1] = cols;
+    pages = 1;
+    for (int k = 2; k < outNd; ++k)
+        pages = checkedMulSize(pages, outDimsBuf[k]);
+
     ValueType outType = promoteNumericType(elems, count);
     // Integer output computed in DOUBLE then cast (round+saturate) — see horzcat.
     const bool intOut = isIntegerType(outType);
@@ -1317,7 +1439,8 @@ Value Value::vertcat(const Value *elems, size_t count, std::pmr::memory_resource
         if (!elems[i].isEmpty() && (elems[i].type() == ValueType::SINGLE || elems[i].isSingleComplex()))
             anySingle = true;
 
-    auto result = (pages > 1) ? Value::matrix3d(totalRows, cols, pages, workType, mr)
+    auto result = (outNd > 3)  ? Value::matrixND(outDimsBuf, outNd, workType, mr)
+                : (pages > 1) ? Value::matrix3d(totalRows, cols, pages, workType, mr)
                               : Value::matrix(totalRows, cols, workType, mr);
     if (workType == ValueType::COMPLEX && anySingle)
         result.setSingleComplex(true);
@@ -2057,7 +2180,9 @@ Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, std::pmr::memory_
 
 size_t Value::checkedScalarIndex(double v)
 {
-    if (std::isnan(v) || std::isinf(v) || v < 1.0 || v != std::floor(v))
+    constexpr double kMaxSafeIdx =
+        (sizeof(size_t) >= 8) ? 9007199254740992.0 : 4294967295.0;
+    if (std::isnan(v) || std::isinf(v) || v < 1.0 || v > kMaxSafeIdx || v != std::floor(v))
         throw std::runtime_error(
             "Array indices must be positive integers or logical values.");
     return static_cast<size_t>(v) - 1;
@@ -2160,7 +2285,7 @@ static void writeElem(Value &dst, size_t idx, const Value &val, size_t valIdx)
         break;
     }
     case ValueType::CHAR:
-        dst.charDataMut()[idx] = static_cast<char>(static_cast<int>(val.elemAsDouble(valIdx)));
+        dst.charDataMut()[idx] = doubleToCharSafe(val.elemAsDouble(valIdx));
         break;
     case ValueType::CELL:
         dst.cellAt(idx) = val.cellAt(valIdx);
@@ -2173,16 +2298,16 @@ static void writeElem(Value &dst, size_t idx, const Value &val, size_t valIdx)
         else                     dst.stringElemSet(idx, val.toString());
         break;
     // Typed integer / single: narrowing conversion from the source
-    // element's double value. MATLAB saturates on overflow; we match
-    // that by using the cast boundaries of each target type.
-    case ValueType::INT8:   dst.int8DataMut()[idx]   = static_cast<int8_t  >(val.elemAsDouble(valIdx)); break;
-    case ValueType::INT16:  dst.int16DataMut()[idx]  = static_cast<int16_t >(val.elemAsDouble(valIdx)); break;
-    case ValueType::INT32:  dst.int32DataMut()[idx]  = static_cast<int32_t >(val.elemAsDouble(valIdx)); break;
-    case ValueType::INT64:  dst.int64DataMut()[idx]  = static_cast<int64_t >(val.elemAsDouble(valIdx)); break;
-    case ValueType::UINT8:  dst.uint8DataMut()[idx]  = static_cast<uint8_t >(val.elemAsDouble(valIdx)); break;
-    case ValueType::UINT16: dst.uint16DataMut()[idx] = static_cast<uint16_t>(val.elemAsDouble(valIdx)); break;
-    case ValueType::UINT32: dst.uint32DataMut()[idx] = static_cast<uint32_t>(val.elemAsDouble(valIdx)); break;
-    case ValueType::UINT64: dst.uint64DataMut()[idx] = static_cast<uint64_t>(val.elemAsDouble(valIdx)); break;
+    // element's double value. MATLAB rounds half away from zero and
+    // saturates on overflow.
+    case ValueType::INT8:   dst.int8DataMut()[idx]   = roundSaturateInt<int8_t  >(val.elemAsDouble(valIdx)); break;
+    case ValueType::INT16:  dst.int16DataMut()[idx]  = roundSaturateInt<int16_t >(val.elemAsDouble(valIdx)); break;
+    case ValueType::INT32:  dst.int32DataMut()[idx]  = roundSaturateInt<int32_t >(val.elemAsDouble(valIdx)); break;
+    case ValueType::INT64:  dst.int64DataMut()[idx]  = roundSaturateInt<int64_t >(val.elemAsDouble(valIdx)); break;
+    case ValueType::UINT8:  dst.uint8DataMut()[idx]  = roundSaturateInt<uint8_t >(val.elemAsDouble(valIdx)); break;
+    case ValueType::UINT16: dst.uint16DataMut()[idx] = roundSaturateInt<uint16_t>(val.elemAsDouble(valIdx)); break;
+    case ValueType::UINT32: dst.uint32DataMut()[idx] = roundSaturateInt<uint32_t>(val.elemAsDouble(valIdx)); break;
+    case ValueType::UINT64: dst.uint64DataMut()[idx] = roundSaturateInt<uint64_t>(val.elemAsDouble(valIdx)); break;
     case ValueType::SINGLE: dst.singleDataMut()[idx] = static_cast<float   >(val.elemAsDouble(valIdx)); break;
     default:
         throw std::runtime_error(
@@ -2208,7 +2333,7 @@ static void writeScalar(Value &dst, size_t idx, const Value &val)
         dst.logicalDataMut()[idx] = static_cast<uint8_t>(val.toScalar() != 0.0);
         break;
     case ValueType::CHAR:
-        dst.charDataMut()[idx] = static_cast<char>(static_cast<int>(val.toScalar()));
+        dst.charDataMut()[idx] = doubleToCharSafe(val.toScalar());
         break;
     case ValueType::CELL:
         dst.cellAt(idx) = val;
@@ -2220,14 +2345,14 @@ static void writeScalar(Value &dst, size_t idx, const Value &val)
         else if (val.isChar())  dst.stringElemSet(idx, val.toString());
         else                    dst.stringElemSet(idx, val.toString());
         break;
-    case ValueType::INT8:   dst.int8DataMut()[idx]   = static_cast<int8_t  >(val.toScalar()); break;
-    case ValueType::INT16:  dst.int16DataMut()[idx]  = static_cast<int16_t >(val.toScalar()); break;
-    case ValueType::INT32:  dst.int32DataMut()[idx]  = static_cast<int32_t >(val.toScalar()); break;
-    case ValueType::INT64:  dst.int64DataMut()[idx]  = static_cast<int64_t >(val.toScalar()); break;
-    case ValueType::UINT8:  dst.uint8DataMut()[idx]  = static_cast<uint8_t >(val.toScalar()); break;
-    case ValueType::UINT16: dst.uint16DataMut()[idx] = static_cast<uint16_t>(val.toScalar()); break;
-    case ValueType::UINT32: dst.uint32DataMut()[idx] = static_cast<uint32_t>(val.toScalar()); break;
-    case ValueType::UINT64: dst.uint64DataMut()[idx] = static_cast<uint64_t>(val.toScalar()); break;
+    case ValueType::INT8:   dst.int8DataMut()[idx]   = roundSaturateInt<int8_t  >(val.toScalar()); break;
+    case ValueType::INT16:  dst.int16DataMut()[idx]  = roundSaturateInt<int16_t >(val.toScalar()); break;
+    case ValueType::INT32:  dst.int32DataMut()[idx]  = roundSaturateInt<int32_t >(val.toScalar()); break;
+    case ValueType::INT64:  dst.int64DataMut()[idx]  = roundSaturateInt<int64_t >(val.toScalar()); break;
+    case ValueType::UINT8:  dst.uint8DataMut()[idx]  = roundSaturateInt<uint8_t >(val.toScalar()); break;
+    case ValueType::UINT16: dst.uint16DataMut()[idx] = roundSaturateInt<uint16_t>(val.toScalar()); break;
+    case ValueType::UINT32: dst.uint32DataMut()[idx] = roundSaturateInt<uint32_t>(val.toScalar()); break;
+    case ValueType::UINT64: dst.uint64DataMut()[idx] = roundSaturateInt<uint64_t>(val.toScalar()); break;
     case ValueType::SINGLE: dst.singleDataMut()[idx] = static_cast<float   >(val.toScalar()); break;
     default:
         throw std::runtime_error(
@@ -3433,7 +3558,12 @@ size_t Value::rawBytes() const
         return sizeof(uint8_t);
     if (isTag())
         return 0;
-    return heap_->buffer ? heap_->buffer->bytes() : 0;
+    if (!heap_->buffer)
+        return 0;
+    const size_t es = elementSize(heap_->type);
+    if (es > 0)
+        return std::min(heap_->dims.numel() * es, heap_->buffer->bytes());
+    return heap_->buffer->bytes();
 }
 
 size_t Value::deepBytes() const
@@ -3666,6 +3796,7 @@ std::string Value::funcHandleSource() const
 void Value::setFuncHandleSource(const std::string &source)
 {
     if (!isHeap()) return;
+    detach();
     delete heap_->funcSource;
     heap_->funcSource = new std::string(source);
 }
@@ -3768,24 +3899,34 @@ Complex *Value::complexDataMut()
     return heap_->buffer ? static_cast<Complex *>(heap_->buffer->data()) : nullptr;
 }
 
-const float *Value::singleData() const { return static_cast<const float*>(rawData()); }
-float *Value::singleDataMut() { return static_cast<float*>(rawDataMut()); }
-const int8_t *Value::int8Data() const { return static_cast<const int8_t*>(rawData()); }
-int8_t *Value::int8DataMut() { return static_cast<int8_t*>(rawDataMut()); }
-const int16_t *Value::int16Data() const { return static_cast<const int16_t*>(rawData()); }
-int16_t *Value::int16DataMut() { return static_cast<int16_t*>(rawDataMut()); }
-const int32_t *Value::int32Data() const { return static_cast<const int32_t*>(rawData()); }
-int32_t *Value::int32DataMut() { return static_cast<int32_t*>(rawDataMut()); }
-const int64_t *Value::int64Data() const { return static_cast<const int64_t*>(rawData()); }
-int64_t *Value::int64DataMut() { return static_cast<int64_t*>(rawDataMut()); }
-const uint8_t  *Value::uint8Data()  const { return static_cast<const uint8_t *>(rawData()); }
-uint8_t  *Value::uint8DataMut()  { return static_cast<uint8_t *>(rawDataMut()); }
-const uint16_t *Value::uint16Data() const { return static_cast<const uint16_t*>(rawData()); }
-uint16_t *Value::uint16DataMut() { return static_cast<uint16_t*>(rawDataMut()); }
-const uint32_t *Value::uint32Data() const { return static_cast<const uint32_t*>(rawData()); }
-uint32_t *Value::uint32DataMut() { return static_cast<uint32_t*>(rawDataMut()); }
-const uint64_t *Value::uint64Data() const { return static_cast<const uint64_t*>(rawData()); }
-uint64_t *Value::uint64DataMut() { return static_cast<uint64_t*>(rawDataMut()); }
+#define NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(CType, ConstFn, MutFn, VType, ErrLabel) \
+    const CType *Value::ConstFn() const                                             \
+    {                                                                               \
+        if (!isHeap() || heap_->type != ValueType::VType)                           \
+            throw std::runtime_error("Not a " ErrLabel " array");                   \
+        return heap_->buffer ? static_cast<const CType *>(heap_->buffer->data())    \
+                             : nullptr;                                             \
+    }                                                                               \
+    CType *Value::MutFn()                                                           \
+    {                                                                               \
+        if (!isHeap() || heap_->type != ValueType::VType)                           \
+            throw std::runtime_error("Not a " ErrLabel " array");                   \
+        detach();                                                                   \
+        return heap_->buffer ? static_cast<CType *>(heap_->buffer->data())          \
+                             : nullptr;                                             \
+    }
+
+NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(float,    singleData, singleDataMut, SINGLE, "single")
+NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(int8_t,   int8Data,   int8DataMut,   INT8,   "int8")
+NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(int16_t,  int16Data,  int16DataMut,  INT16,  "int16")
+NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(int32_t,  int32Data,  int32DataMut,  INT32,  "int32")
+NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(int64_t,  int64Data,  int64DataMut,  INT64,  "int64")
+NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(uint8_t,  uint8Data,  uint8DataMut,  UINT8,  "uint8")
+NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(uint16_t, uint16Data, uint16DataMut, UINT16, "uint16")
+NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(uint32_t, uint32Data, uint32DataMut, UINT32, "uint32")
+NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(uint64_t, uint64Data, uint64DataMut, UINT64, "uint64")
+
+#undef NUMKIT_DEFINE_TYPED_DATA_ACCESSORS
 
 void Value::promoteToComplex(std::pmr::memory_resource *mr)
 {
@@ -3900,8 +4041,21 @@ void Value::resize(size_t newRows, size_t newCols, std::pmr::memory_resource *mr
         *this = matrix(newRows, newCols, ValueType::DOUBLE, mr);
         return;
     }
-    if (!isHeap())
-        throw std::runtime_error("Cannot resize");
+    if (!isHeap()) {
+        bool lv = isLogicalTrue();
+        *this = matrix(1, 1, ValueType::LOGICAL, mr);
+        *logicalDataMut() = lv ? 1 : 0;
+    }
+    if (heap_->dims.ndim() > 3) {
+        size_t ndBuf[Dims::kMaxRank];
+        const int nd = heap_->dims.ndim();
+        ndBuf[0] = newRows;
+        ndBuf[1] = newCols;
+        for (int k = 2; k < nd; ++k)
+            ndBuf[k] = heap_->dims.dim(k);
+        resizeND(ndBuf, nd, mr);
+        return;
+    }
     if (heap_->dims.is3D()) {
         resize3d(newRows, newCols, heap_->dims.pages(), mr);
         return;
@@ -3909,16 +4063,55 @@ void Value::resize(size_t newRows, size_t newCols, std::pmr::memory_resource *mr
     detach();
     if (!mr)
         mr = heap_->mr;
-    size_t oldR = heap_->dims.rows(), oldC = heap_->dims.cols(), es = elementSize(heap_->type),
-           nb = newRows * newCols * es;
-    auto *nb2 = new DataBuffer(nb, mr);
+    const size_t oldR = heap_->dims.rows(), oldC = heap_->dims.cols();
+    const size_t cr = std::min(oldR, newRows), cc = std::min(oldC, newCols);
+    if (heap_->type == ValueType::CELL || heap_->type == ValueType::STRING) {
+        Value grown = (heap_->type == ValueType::CELL)
+                          ? Value::cell(newRows, newCols, mr)
+                          : Value::stringArray(newRows, newCols, mr);
+        if (heap_->cellData) {
+            auto &dst = *grown.heap_->cellData;
+            const auto &src = *heap_->cellData;
+            for (size_t c = 0; c < cc; ++c)
+                for (size_t r = 0; r < cr; ++r)
+                    dst[c * newRows + r] = src[c * oldR + r];
+        }
+        *this = std::move(grown);
+        return;
+    }
+    if (heap_->type == ValueType::STRUCT) {
+        Value grown = Value::structArray(newRows, newCols, mr);
+        if (heap_->fieldOrder && grown.heap_->fieldOrder)
+            *grown.heap_->fieldOrder = *heap_->fieldOrder;
+        if (heap_->structArray) {
+            auto &dst = *grown.heap_->structArray;
+            const auto &src = *heap_->structArray;
+            auto *cmr = mr ? mr : std::pmr::get_default_resource();
+            for (size_t c = 0; c < cc; ++c)
+                for (size_t r = 0; r < cr; ++r)
+                    dst[c * newRows + r] = std::pmr::map<std::string, Value>(src[c * oldR + r], cmr);
+            if (heap_->fieldOrder) {
+                for (size_t i = 0; i < dst.size(); ++i)
+                    for (const auto &fn : *heap_->fieldOrder)
+                        if (dst[i].find(fn) == dst[i].end())
+                            dst[i].emplace(fn, Value::matrix(0, 0, ValueType::DOUBLE, cmr));
+            }
+        }
+        *this = std::move(grown);
+        return;
+    }
+    const size_t es = elementSize(heap_->type);
+    if (es == 0)
+        throw std::runtime_error(
+            std::string("Cannot resize array of type '") + mtypeName(heap_->type) + "'");
+    const size_t nb = checkedMulSize(checkedMulSize(newRows, newCols), es);
+    auto *nb2 = (nb > 0) ? new DataBuffer(nb, mr) : nullptr;
     if (nb > 0) {
         // CHAR arrays fill with spaces; everything else with zeros
         int fill = (heap_->type == ValueType::CHAR) ? ' ' : 0;
         std::memset(nb2->data(), fill, nb);
     }
-    if (heap_->buffer && es > 0) {
-        size_t cr = std::min(oldR, newRows), cc = std::min(oldC, newCols);
+    if (heap_->buffer && nb2 && cr > 0 && cc > 0) {
         const char *s = static_cast<const char *>(heap_->buffer->data());
         char *d = static_cast<char *>(nb2->data());
         for (size_t c = 0; c < cc; ++c)
@@ -3934,7 +4127,7 @@ void Value::resize(size_t newRows, size_t newCols, std::pmr::memory_resource *mr
 
 void Value::resize3d(size_t nr, size_t nc, size_t np, std::pmr::memory_resource *mr)
 {
-    if (np <= 1) {
+    if (np <= 1 && (!isHeap() || heap_->dims.ndim() <= 2)) {
         resize(nr, nc, mr);
         return;
     }
@@ -3952,21 +4145,43 @@ void Value::resize3d(size_t nr, size_t nc, size_t np, std::pmr::memory_resource 
         *this = matrix3d(nr, nc, np, ValueType::DOUBLE, mr);
         return;
     }
-    if (!isHeap())
-        throw std::runtime_error("Cannot resize");
+    if (!isHeap()) {
+        bool lv = isLogicalTrue();
+        *this = matrix(1, 1, ValueType::LOGICAL, mr);
+        *logicalDataMut() = lv ? 1 : 0;
+    }
     detach();
     if (!mr)
         mr = heap_->mr;
-    size_t oR = heap_->dims.rows(), oC = heap_->dims.cols(), oP = heap_->dims.pages(),
-           es = elementSize(heap_->type);
-    size_t nb = nr * nc * np * es;
-    auto *nb2 = new DataBuffer(nb, mr);
+    const size_t oR = heap_->dims.rows(), oC = heap_->dims.cols(),
+                 oP = heap_->dims.dim(2);
+    const size_t cr = std::min(oR, nr), cc = std::min(oC, nc), cp = std::min(oP, np);
+    if (heap_->type == ValueType::CELL || heap_->type == ValueType::STRING) {
+        Value grown = (heap_->type == ValueType::CELL)
+                          ? Value::cell3D(nr, nc, np, mr)
+                          : Value::stringArray3D(nr, nc, np, mr);
+        if (heap_->cellData) {
+            auto &dst = *grown.heap_->cellData;
+            const auto &src = *heap_->cellData;
+            for (size_t p = 0; p < cp; ++p)
+                for (size_t c = 0; c < cc; ++c)
+                    for (size_t r = 0; r < cr; ++r)
+                        dst[p * nr * nc + c * nr + r] = src[p * oR * oC + c * oR + r];
+        }
+        *this = std::move(grown);
+        return;
+    }
+    const size_t es = elementSize(heap_->type);
+    if (es == 0)
+        throw std::runtime_error(
+            std::string("Cannot resize array of type '") + mtypeName(heap_->type) + "'");
+    const size_t nb = checkedMulSize(checkedMulSize(checkedMulSize(nr, nc), np), es);
+    auto *nb2 = (nb > 0) ? new DataBuffer(nb, mr) : nullptr;
     if (nb > 0) {
         int fill = (heap_->type == ValueType::CHAR) ? ' ' : 0;
         std::memset(nb2->data(), fill, nb);
     }
-    if (heap_->buffer && es > 0) {
-        size_t cr = std::min(oR, nr), cc = std::min(oC, nc), cp = std::min(oP, np);
+    if (heap_->buffer && nb2 && cr > 0 && cc > 0 && cp > 0) {
         const char *s = static_cast<const char *>(heap_->buffer->data());
         char *d = static_cast<char *>(nb2->data());
         for (size_t p = 0; p < cp; ++p)
@@ -3979,7 +4194,7 @@ void Value::resize3d(size_t nr, size_t nc, size_t np, std::pmr::memory_resource 
         delete heap_->buffer;
     heap_->buffer = nb2;
     heap_->mr = mr;
-    heap_->dims = {nr, nc, np};
+    heap_->dims = (np <= 1) ? Dims{nr, nc} : Dims{nr, nc, np};
     heap_->appendCapacity = 0;
 }
 
@@ -4011,8 +4226,11 @@ void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *m
         *this = matrixND(newDims, nd, ValueType::DOUBLE, mr);
         return;
     }
-    if (!isHeap())
-        throw std::runtime_error("Cannot resize");
+    if (!isHeap()) {
+        bool lv = isLogicalTrue();
+        *this = matrix(1, 1, ValueType::LOGICAL, mr);
+        *logicalDataMut() = lv ? 1 : 0;
+    }
     detach();
     if (!mr) mr = heap_->mr;
 
@@ -4020,8 +4238,7 @@ void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *m
     const Dims oldDims = heap_->dims;
     const int oldNd = oldDims.ndim();
 
-    size_t newTotal = 1;
-    for (int i = 0; i < nd; ++i) newTotal *= newDims[i];
+    const size_t newTotal = checkedMulDims(newDims, nd);
 
     size_t oldStrides[kMaxNd], newStrides[kMaxNd];
     computeStridesColMajor(oldDims, oldStrides);
@@ -4036,9 +4253,13 @@ void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *m
         commonTotal *= commonDims[i];
     }
 
-    if (t == ValueType::CELL) {
-        auto newCell = Value::cellND(newDims, nd);
-        if (commonTotal > 0) {
+    if (t == ValueType::CELL || t == ValueType::STRING) {
+        auto newArr = (t == ValueType::CELL)
+                          ? Value::cellND(newDims, nd, mr)
+                          : Value::stringArrayND(newDims, nd, mr);
+        if (commonTotal > 0 && heap_->cellData) {
+            auto &dst = *newArr.heap_->cellData;
+            const auto &src = *heap_->cellData;
             Dims commonD(commonDims, commonNd);
             size_t coords[kMaxNd] = {0};
             do {
@@ -4047,10 +4268,10 @@ void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *m
                     oldOff += coords[i] * oldStrides[i];
                     newOff += coords[i] * newStrides[i];
                 }
-                newCell.cellAt(newOff) = cellAt(oldOff);
+                dst[newOff] = src[oldOff];
             } while (incrementCoords(coords, commonD));
         }
-        *this = std::move(newCell);
+        *this = std::move(newArr);
         return;
     }
 
@@ -4059,13 +4280,13 @@ void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *m
         throw std::runtime_error(
             std::string("resizeND not supported for type '") + mtypeName(t) + "'");
 
-    const size_t nb = newTotal * es;
-    auto *nb2 = new DataBuffer(nb, mr);
+    const size_t nb = checkedMulSize(newTotal, es);
+    auto *nb2 = (nb > 0) ? new DataBuffer(nb, mr) : nullptr;
     if (nb > 0) {
         const int fill = (t == ValueType::CHAR) ? ' ' : 0;
         std::memset(nb2->data(), fill, nb);
     }
-    if (heap_->buffer && commonTotal > 0) {
+    if (heap_->buffer && nb2 && commonTotal > 0) {
         const char *src = static_cast<const char *>(heap_->buffer->data());
         char *dst = static_cast<char *>(nb2->data());
         Dims commonD(commonDims, commonNd);
@@ -4114,8 +4335,11 @@ void Value::appendScalar(double v, std::pmr::memory_resource *mr)
 
     // Empty → fresh 1-element heap double with headroom.
     if (isEmpty()) {
+        if (!mr && isHeap())
+            mr = heap_->mr;
+        releaseHeap();
         size_t cap = 8;
-        auto *h = new HeapObject();
+        std::unique_ptr<HeapObject> h(new HeapObject());
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
         h->mr = mr;
@@ -4124,7 +4348,7 @@ void Value::appendScalar(double v, std::pmr::memory_resource *mr)
         double *d = static_cast<double *>(h->buffer->data());
         std::memset(d, 0, cap * sizeof(double));
         d[0] = v;
-        heap_ = h;   // emptyTag is a static sentinel, nothing to release
+        heap_ = h.release();
         return;
     }
 
@@ -4182,8 +4406,11 @@ void Value::appendScalarCol(double v, std::pmr::memory_resource *mr)
     size_t oldN = numel(), newN = oldN + 1;
 
     if (isEmpty()) {
+        if (!mr && isHeap())
+            mr = heap_->mr;
+        releaseHeap();
         size_t cap = 8;
-        auto *h = new HeapObject();
+        std::unique_ptr<HeapObject> h(new HeapObject());
         h->type = ValueType::DOUBLE;
         h->dims = {newN, 1};
         h->mr = mr;
@@ -4192,13 +4419,13 @@ void Value::appendScalarCol(double v, std::pmr::memory_resource *mr)
         double *d = static_cast<double *>(h->buffer->data());
         std::memset(d, 0, cap * sizeof(double));
         d[0] = v;
-        heap_ = h;
+        heap_ = h.release();
         return;
     }
     if (heap_ == nullptr) {
         double old = scalar_;
         size_t cap = std::max(size_t(8), newN * 2);
-        auto *h = new HeapObject();
+        std::unique_ptr<HeapObject> h(new HeapObject());
         h->type = ValueType::DOUBLE;
         h->dims = {newN, 1};
         h->mr = mr;
@@ -4208,7 +4435,7 @@ void Value::appendScalarCol(double v, std::pmr::memory_resource *mr)
         std::memset(d, 0, cap * sizeof(double));
         d[0] = old;
         d[1] = v;
-        heap_ = h;
+        heap_ = h.release();
         return;
     }
     if (!isHeap())
@@ -4234,8 +4461,9 @@ void Value::appendScalarCol(double v, std::pmr::memory_resource *mr)
         std::memcpy(d, heap_->buffer->data(), oldN * sizeof(double));
     d[oldN] = v;
     if (heap_->buffer && heap_->buffer->release())
-        heap_->buffer = nullptr;
+        delete heap_->buffer;
     heap_->buffer = nb;
+    heap_->mr = mr;
     heap_->appendCapacity = nc;
     heap_->dims = {newN, 1};
 }

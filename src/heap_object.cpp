@@ -36,8 +36,13 @@ HeapObject *HeapObject::clone() const
     // to keep the contract symmetric.
     auto *cmr = mr ? mr : std::pmr::get_default_resource();
     if (buffer) {
-        h->buffer = new DataBuffer(buffer->bytes(), mr);
-        std::memcpy(h->buffer->data(), buffer->data(), buffer->bytes());
+        const size_t es = elementSize(type);
+        const size_t copyBytes =
+            (es > 0) ? std::min(dims.numel() * es, buffer->bytes()) : buffer->bytes();
+        if (copyBytes > 0) {
+            h->buffer = new DataBuffer(copyBytes, mr);
+            std::memcpy(h->buffer->data(), buffer->data(), copyBytes);
+        }
     }
     if (cellData)
         h->cellData = new std::pmr::vector<Value>(*cellData, cmr);

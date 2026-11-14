@@ -297,7 +297,7 @@ public:
     static Value stringArrayND(const size_t *dims, int nd, std::pmr::memory_resource *mr = nullptr);
 
     // ���─ String accessors ────────────────────────────────────
-    const std::string &stringElem(size_t i) const;
+    std::string stringElem(size_t i) const;
     void stringElemSet(size_t i, const std::string &s);
 
     // ── Type queries ─────────────────────────────────────────
@@ -618,11 +618,19 @@ public:
     // Refcount of the underlying heap buffer. Returns 1 for scalar /
     // empty / tag values (no shared ownership possible). Used by fast
     // paths that want to mutate in-place iff they're the sole owner.
+    // Views (non-owning DataBuffers) and shared DataBuffers report >= 2
+    // so fast-path writers always detach (COW) instead of clobbering
+    // caller-owned memory.
     int heapRefCount() const
     {
         if (!isHeap())
             return 1;
-        return heap_->refCount.load(std::memory_order_relaxed);
+        int rc = heap_->refCount.load(std::memory_order_acquire);
+        if (rc > 1)
+            return rc;
+        if (heap_->buffer && (!heap_->buffer->owns() || heap_->buffer->refCount() > 1))
+            return 2;
+        return 1;
     }
 
     // True iff heap_ points at a real (non-tag, non-null) heap object.
@@ -633,11 +641,14 @@ public:
         return isHeap();
     }
 
-    // Get mutable data pointer — skips detach when refcount == 1 (sole owner).
+    // Get mutable data pointer — skips detach only when sole owner of an
+    // owning DataBuffer (never mutates a zero-copy Value::view in place).
     // Caller must guarantee this is a heap DOUBLE array.
     double *doubleDataMutFast()
     {
-        if (heap_->refCount.load(std::memory_order_relaxed) == 1)
+        if (heap_->refCount.load(std::memory_order_acquire) == 1
+            && heap_->buffer && heap_->buffer->owns()
+            && heap_->buffer->refCount() == 1)
             return static_cast<double *>(heap_->buffer->data());
         detach();
         return static_cast<double *>(heap_->buffer->data());
@@ -654,7 +665,7 @@ public:
     // without an O(N) memcpy. Caller must guarantee:
     //   * both MValues are heap (hasHeap() && !isTag())
     //   * both heaps are uniquely owned (heapRefCount() == 1)
-    //   * both buffers are the same byte size
+    //   * both buffers have the same logical payload size
     // After the swap, `other` holds this Value's prior buffer; on its
     // next overwrite (typically the temp-register reuse a few bytecode
     // ops later) that buffer is freed.
@@ -663,18 +674,15 @@ public:
         DataBuffer *tmp = heap_->buffer;
         heap_->buffer = other.heap_->buffer;
         other.heap_->buffer = tmp;
+        size_t capTmp = heap_->appendCapacity;
+        heap_->appendCapacity = other.heap_->appendCapacity;
+        other.heap_->appendCapacity = capTmp;
     }
 
 private:
     // ── 16-byte layout ───────────────────────────────────────
     double scalar_ = 0.0;
     HeapObject *heap_;
-
-    // ── Sentinel tags ────────────────────────────────────────
-    static HeapObject sEmptyTag;
-    static HeapObject sLogicalTrue;
-    static HeapObject sLogicalFalse;
-    static HeapObject sDeletedTag;
 
     // ── Tag constants ────────────────────────────────────────
     static HeapObject *emptyTag() { return reinterpret_cast<HeapObject *>(uintptr_t(1)); }
