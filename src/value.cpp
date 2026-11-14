@@ -4599,24 +4599,21 @@ void Value::growStructArrayTo(size_t idx, std::pmr::memory_resource *mr)
     const bool isCol = (dims().cols() == 1 && dims().rows() > 1);
     const size_t newRows = isCol ? newSize : 1;
     const size_t newCols = isCol ? 1       : newSize;
-    Value grown = Value::structArray(newRows, newCols, mr);
-    for (size_t k = 0; k < numel(); ++k) {
-        auto &dst = grown.structArrayElem(k);
-        const auto &src = structArrayElem(k);
-        for (const auto &[kn, vv] : src)
-            dst.emplace(kn, vv);
+
+    detach();
+    const size_t oldSize = heap_->structArray->size();
+    heap_->dims = Dims(newRows, newCols);
+    if (!heap_->fieldOrder)
+        heap_->fieldOrder = new std::pmr::vector<std::string>(mr);
+    if (newSize > heap_->structArray->capacity())
+        heap_->structArray->reserve(std::max(newSize, heap_->structArray->capacity() * 2));
+    using MapT = std::pmr::map<std::string, Value>;
+    for (size_t k = oldSize; k < newSize; ++k) {
+        heap_->structArray->emplace_back(MapT(mr));
+        auto &dst = heap_->structArray->back();
+        for (const auto &fn : *heap_->fieldOrder)
+            dst.try_emplace(fn, Value());
     }
-    // BUG #15: copy insertion-order tracker so growStructArrayTo doesn't
-    // lose it (e.g. struct array element appended via s(end+1).f = v).
-    if (heap_ && heap_->fieldOrder && grown.heap_ && grown.heap_->fieldOrder) {
-        *grown.heap_->fieldOrder = *heap_->fieldOrder;
-        for (size_t k = 0; k < grown.numel(); ++k) {
-            auto &dst = (*grown.heap_->structArray)[k];
-            for (const auto &fn : *grown.heap_->fieldOrder)
-                dst.try_emplace(fn, Value());
-        }
-    }
-    *this = std::move(grown);
 }
 size_t Value::growStructArrayND(const size_t *coords, int nd,
                                 std::pmr::memory_resource *mr)
@@ -4732,14 +4729,16 @@ size_t Value::growCellTo(const size_t *coords, int nd, std::pmr::memory_resource
     };
 
     if (nd == 1) {
-        // 1-D: preserve row/column orientation, grow linearly.
+        // 1-D: preserve row/column orientation, grow in-place (amortized O(1)).
         size_t i = coords[0];
         if (i >= numel()) {
             const bool isCol = (dims().cols() == 1 && dims().rows() > 1);
-            Value grown = isCol ? Value::cell(i + 1, 1, mr) : Value::cell(1, i + 1, mr);
-            for (size_t k = 0; k < numel(); ++k)
-                grown.cellAt(k) = cellAt(k);
-            *this = std::move(grown);
+            detach();
+            const size_t newSize = i + 1;
+            heap_->dims = isCol ? Dims(newSize, 1) : Dims(1, newSize);
+            if (newSize > heap_->cellData->capacity())
+                heap_->cellData->reserve(std::max(newSize, heap_->cellData->capacity() * 2));
+            heap_->cellData->resize(newSize);
         }
         return i;
     }
