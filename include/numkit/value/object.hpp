@@ -6,14 +6,14 @@
 
 #include <numkit/value/value.hpp>
 
+#include <keel/array.h>
+#include <keel/function.h>
+#include <keel/hash_map.h>
 #include <keel/ref.h>
+#include <keel/smart_ptr.h>
+#include <keel/string.h>
 
-#include <functional>
-#include <map>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include <stdexcept>
 
 namespace numkit {
 
@@ -26,57 +26,64 @@ struct UserFunction;  // defined in core/types.hpp
 struct NativePayload
 {
     virtual ~NativePayload() = default;
-    virtual std::shared_ptr<NativePayload> clone() const = 0;
+    virtual keel::Arc<NativePayload> clone(keel::Allocator *alloc = nullptr) const = 0;
     virtual keel::f64 asDouble() const
     {
         throw std::runtime_error("Cannot read element as double from type 'object'");
     }
-    virtual std::shared_ptr<NativePayload> fromScalarDouble(keel::f64 v) const
+    virtual keel::Arc<NativePayload> fromScalarDouble(keel::f64 v,
+                                                      keel::Allocator *alloc = nullptr) const
     {
         (void)v;
+        (void)alloc;
         return nullptr;
     }
 };
 
 // ============================================================
-// ObjectState — instance state, shared via shared_ptr.
+// ObjectState — instance state, shared via keel::Arc.
 // ============================================================
 struct ObjectState
 {
-    std::map<std::string, Value>   props;
-    std::shared_ptr<NativePayload> native;
-    std::string                    enumName;
+    keel::HashMap<keel::String, Value> props;
+    keel::Arc<NativePayload>           native;
+    keel::String                       enumName;
 
-    explicit ObjectState(keel::Allocator * /*alloc*/ = nullptr) {}
+    explicit ObjectState(keel::Allocator *alloc = nullptr) noexcept
+        : props(alloc)
+        , enumName(alloc)
+    {}
 
-    std::shared_ptr<ObjectState> deepCopy(keel::Allocator *alloc = nullptr) const
+    keel::Arc<ObjectState> deepCopy(keel::Allocator *alloc = nullptr) const
     {
-        auto s = std::make_shared<ObjectState>(alloc);
-        s->props = props;
-        s->native = native ? native->clone() : nullptr;
-        s->enumName = enumName;
+        keel::Allocator *a = alloc ? alloc : props.allocator();
+        auto s = keel::make_arc_in<ObjectState>(a, a);
+        s->props = props.clone(a);
+        s->native = native ? native->clone(a) : nullptr;
+        s->enumName = enumName.clone(a);
         return s;
     }
 };
 
-using ObjectMethod = std::function<void(Value &self, keel::ArrayRef<Value> args,
-                                        keel::usize nargout, keel::MutArrayRef<Value> outs,
-                                        CallContext &ctx)>;
+using ObjectMethod = keel::SmallFunction<void(Value &self, keel::ArrayRef<Value> args,
+                                              keel::usize nargout, keel::MutArrayRef<Value> outs,
+                                              CallContext &ctx), 32>;
 
 struct PropMeta
 {
-    std::string name;
-    std::string getAccess = "public";
-    std::string setAccess = "public";
-    bool        isConstant = false;
-    bool        isDependent = false;
+    keel::String name;
+    keel::String getAccess = keel::String("public");
+    keel::String setAccess = keel::String("public");
+    bool         isConstant = false;
+    bool         isDependent = false;
 };
+
 struct MethodMeta
 {
-    std::string name;
-    bool        isStatic = false;
-    std::string access = "public";
-    bool        isAbstract = false;
+    keel::String name;
+    bool         isStatic = false;
+    keel::String access = keel::String("public");
+    bool         isAbstract = false;
 };
 
 // ============================================================
@@ -84,30 +91,30 @@ struct MethodMeta
 // ============================================================
 struct BuiltinClass
 {
-    std::string name;
-    bool        isHandle = false;
-    bool        isSealed = false;
-    bool        isAbstract = false;
-    std::vector<std::string> superclasses;
+    keel::String name;
+    bool         isHandle = false;
+    bool         isSealed = false;
+    bool         isAbstract = false;
+    keel::Array<keel::String> superclasses;
 
-    std::function<Value(keel::ArrayRef<Value> args, CallContext &ctx)> construct;
+    keel::SmallFunction<Value(keel::ArrayRef<Value> args, CallContext &ctx), 32> construct;
 
-    std::unordered_map<std::string, ObjectMethod> methods;
+    keel::HashMap<keel::String, ObjectMethod> methods;
 
-    std::vector<std::string> propNames;
-    std::function<bool(const Value &self, const std::string &name,
-                       Value &out, CallContext &ctx)> propGet;
-    std::function<bool(Value &self, const std::string &name,
-                       const Value &val, CallContext &ctx)> propSet;
+    keel::Array<keel::String> propNames;
+    keel::SmallFunction<bool(const Value &self, keel::StringRef name,
+                             Value &out, CallContext &ctx), 32> propGet;
+    keel::SmallFunction<bool(Value &self, keel::StringRef name,
+                             const Value &val, CallContext &ctx), 32> propSet;
 
     ObjectMethod subsref;
     ObjectMethod subsasgn;
-    std::function<std::string(const Value &self)> dispText;
-    std::unordered_map<std::string, ObjectMethod> ops;
-    std::vector<std::string> hidden;
-    std::vector<PropMeta>   propMeta;
-    std::vector<MethodMeta> methodMeta;
-    std::unordered_map<std::string, std::shared_ptr<const UserFunction>> methodFns;
+    keel::SmallFunction<keel::String(const Value &self), 32> dispText;
+    keel::HashMap<keel::String, ObjectMethod> ops;
+    keel::Array<keel::String> hidden;
+    keel::Array<PropMeta>     propMeta;
+    keel::Array<MethodMeta>   methodMeta;
+    keel::HashMap<keel::String, keel::Arc<const UserFunction>> methodFns;
 };
 
 } // namespace numkit

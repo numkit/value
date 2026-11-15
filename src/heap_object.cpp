@@ -5,49 +5,66 @@
 
 namespace numkit {
 
-HeapObject::~HeapObject()
+HeapObject *HeapObject::create(keel::Allocator *alloc)
+{
+    keel::Allocator *a = alloc ? alloc : keel::default_allocator();
+    void *mem = a->try_alloc_bytes(sizeof(HeapObject), alignof(HeapObject));
+    if (!mem)
+        throw std::bad_alloc();
+    return ::new (mem) HeapObject(a);
+}
+
+void HeapObject::destroy(HeapObject *h) noexcept
+{
+    if (!h)
+        return;
+    keel::Allocator *a = h->alloc ? h->alloc : keel::default_allocator();
+    h->~HeapObject();
+    a->free_bytes(h, sizeof(HeapObject), alignof(HeapObject));
+}
+
+HeapObject::~HeapObject() noexcept
 {
     if (buffer) {
         if (buffer->release())
-            delete buffer;
+            DataBuffer::destroy(buffer);
     }
-    delete cellData;
-    delete structArray;
-    delete fieldOrder;
-    delete funcName;
-    delete funcSource;
-    delete objClass;
+    allocDelete(cellData);
+    allocDelete(structArray);
+    allocDelete(fieldOrder);
+    allocDelete(funcName);
+    allocDelete(funcSource);
+    allocDelete(objClass);
 }
 
 HeapObject *HeapObject::clone() const
 {
-    auto *h = new HeapObject();
+    keel::Allocator *ca = alloc ? alloc : keel::default_allocator();
+    HeapGuard h(HeapObject::create(ca));
     h->type = type;
     h->dims = dims;
-    h->alloc = alloc;
     h->isSingleComplex = isSingleComplex;
-    keel::Allocator *ca = alloc ? alloc : keel::default_allocator();
     if (buffer) {
         const keel::usize es = elementSize(type);
         const keel::usize copyBytes =
             (es > 0) ? keel::min(dims.numel() * es, buffer->bytes()) : buffer->bytes();
         if (copyBytes > 0) {
-            h->buffer = new DataBuffer(copyBytes, alloc);
+            h->buffer = DataBuffer::create(copyBytes, ca);
             keel::mem_copy(h->buffer->data(), buffer->data(), copyBytes);
         }
     }
     if (cellData)
-        h->cellData = new keel::Array<Value>(cellData->clone(ca));
+        h->cellData = h->allocNew<keel::Array<Value>>(cellData->clone(ca));
     if (structArray)
-        h->structArray = new std::vector<std::map<std::string, Value>>(*structArray);
+        h->structArray = h->allocNew<keel::Array<keel::HashMap<keel::String, Value>>>(structArray->clone(ca));
     if (fieldOrder)
-        h->fieldOrder = new std::vector<std::string>(*fieldOrder);
+        h->fieldOrder = h->allocNew<keel::Array<keel::String>>(fieldOrder->clone(ca));
     if (funcName)
-        h->funcName = new std::string(*funcName);
+        h->funcName = h->allocNew<keel::String>(funcName->clone(ca));
     if (funcSource)
-        h->funcSource = new std::string(*funcSource);
+        h->funcSource = h->allocNew<keel::String>(funcSource->clone(ca));
     if (objClass) {
-        h->objClass = new std::string(*objClass);
+        h->objClass = h->allocNew<keel::String>(objClass->clone(ca));
         h->objIsHandle = objIsHandle;
         h->objStates.reserve(objStates.size());
         for (const auto &st : objStates) {
@@ -57,7 +74,7 @@ HeapObject *HeapObject::clone() const
                 h->objStates.push_back(st->deepCopy(ca));
         }
     }
-    return h;
+    return h.release();
 }
 
 } // namespace numkit

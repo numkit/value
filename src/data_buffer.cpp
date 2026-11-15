@@ -33,10 +33,42 @@ DataBuffer::DataBuffer(ViewTag, void *external, keel::usize bytes) noexcept
     , owns_(false)
 {}
 
-DataBuffer::~DataBuffer()
+DataBuffer::~DataBuffer() noexcept
 {
     if (data_ && owns_)
         alloc_->free_bytes(data_, bytes_, bufferAlign(bytes_));
+}
+
+DataBuffer *DataBuffer::create(keel::usize bytes, keel::Allocator *alloc)
+{
+    keel::Allocator *a = alloc ? alloc : keel::default_allocator();
+    void *mem = a->try_alloc_bytes(sizeof(DataBuffer), alignof(DataBuffer));
+    if (!mem)
+        throw std::bad_alloc();
+    try {
+        return ::new (mem) DataBuffer(bytes, a);
+    } catch (...) {
+        a->free_bytes(mem, sizeof(DataBuffer), alignof(DataBuffer));
+        throw;
+    }
+}
+
+DataBuffer *DataBuffer::createView(void *external, keel::usize bytes)
+{
+    keel::Allocator *a = keel::default_allocator();
+    void *mem = a->try_alloc_bytes(sizeof(DataBuffer), alignof(DataBuffer));
+    if (!mem)
+        throw std::bad_alloc();
+    return ::new (mem) DataBuffer(ViewTag{}, external, bytes);
+}
+
+void DataBuffer::destroy(DataBuffer *buf) noexcept
+{
+    if (!buf)
+        return;
+    keel::Allocator *a = buf->alloc_;
+    buf->~DataBuffer();
+    a->free_bytes(buf, sizeof(DataBuffer), alignof(DataBuffer));
 }
 
 void DataBuffer::addRef() noexcept

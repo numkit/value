@@ -6,9 +6,6 @@
 #include <keel/ref.h>
 
 #include <initializer_list>
-#include <map>
-#include <string>
-#include <vector>
 
 namespace numkit {
 
@@ -56,7 +53,7 @@ class Value
 {
 public:
     Value();
-    ~Value();
+    ~Value() noexcept;
 
     Value(const Value &other);
     Value &operator=(const Value &other);
@@ -112,7 +109,7 @@ public:
                           keel::i32 nd,
                           ValueType t = ValueType::DOUBLE,
                           keel::Allocator *alloc = nullptr);
-    static Value fromString(const std::string &s, keel::Allocator *alloc = nullptr);
+    static Value fromString(keel::StringRef s, keel::Allocator *alloc = nullptr);
     static Value cell(keel::usize rows, keel::usize cols, keel::Allocator *alloc = nullptr);
     static Value cell3D(keel::usize rows, keel::usize cols, keel::usize pages, keel::Allocator *alloc = nullptr);
     static Value cellND(const keel::usize *dims, keel::i32 nd, keel::Allocator *alloc = nullptr);
@@ -120,12 +117,12 @@ public:
     static Value structure(keel::Allocator *alloc = nullptr);
     static Value structArray(keel::usize rows, keel::usize cols,
                              keel::Allocator *alloc = nullptr);
-    static Value funcHandle(const std::string &name, keel::Allocator *alloc = nullptr);
-    static Value object(const std::string &className,
-                        std::shared_ptr<ObjectState> state, bool isHandle,
+    static Value funcHandle(keel::StringRef name, keel::Allocator *alloc = nullptr);
+    static Value object(keel::StringRef className,
+                        keel::Arc<ObjectState> state, bool isHandle,
                         keel::Allocator *alloc = nullptr);
-    static Value objectArray(const std::string &className, const Dims &dims,
-                             std::vector<std::shared_ptr<ObjectState>> states, bool isHandle,
+    static Value objectArray(keel::StringRef className, const Dims &dims,
+                             keel::Array<keel::Arc<ObjectState>> states, bool isHandle,
                              keel::Allocator *alloc = nullptr);
     static Value deleted();
 
@@ -158,8 +155,8 @@ public:
     Value logicalIndex(const keel::u8 *mask, keel::usize maskLen, keel::Allocator *alloc = nullptr) const;
 
     // ── Index resolution ────────────────────────────────────
-    static std::vector<keel::usize> resolveIndices(const Value &idx, keel::usize dimSize);
-    static std::vector<keel::usize> resolveIndicesUnchecked(const Value &idx);
+    static keel::Array<keel::usize> resolveIndices(const Value &idx, keel::usize dimSize);
+    static keel::Array<keel::usize> resolveIndicesUnchecked(const Value &idx);
     static keel::usize checkedScalarIndex(keel::f64 oneBased);
 
     // ── Type-preserving indexed assignment ──────────────────
@@ -197,14 +194,14 @@ public:
     static Value complexMatrix(keel::usize rows, keel::usize cols, keel::Allocator *alloc = nullptr);
 
     // ── Factories — string ───────────────────────────────────
-    static Value stringScalar(const std::string &s, keel::Allocator *alloc = nullptr);
+    static Value stringScalar(keel::StringRef s, keel::Allocator *alloc = nullptr);
     static Value stringArray(keel::usize rows, keel::usize cols, keel::Allocator *alloc = nullptr);
     static Value stringArray3D(keel::usize rows, keel::usize cols, keel::usize pages, keel::Allocator *alloc = nullptr);
     static Value stringArrayND(const keel::usize *dims, keel::i32 nd, keel::Allocator *alloc = nullptr);
 
     // ── String accessors ────────────────────────────────────
-    std::string stringElem(keel::usize i) const;
-    void stringElemSet(keel::usize i, const std::string &s);
+    keel::String stringElem(keel::usize i) const;
+    void stringElemSet(keel::usize i, keel::StringRef s);
 
     // ── Type queries ─────────────────────────────────────────
     ValueType type() const;
@@ -229,7 +226,7 @@ public:
     bool isCsl() const;
 
     // ── OBJECT accessors (see object.hpp) ────────────────────
-    std::string objectClassName() const;
+    keel::String objectClassName() const;
     bool objectIsHandle() const;
     keel::usize objectCount() const;
     const ObjectState *objectStateConst() const;
@@ -237,7 +234,7 @@ public:
     const ObjectState *objectStateAt(keel::usize i) const;
     ObjectState *objectStateMutAt(keel::usize i);
 
-    Value objectSubArray(const std::vector<keel::usize> &idxs,
+    Value objectSubArray(keel::ArrayRef<keel::usize> idxs,
                          keel::Allocator *alloc = nullptr) const;
     Value objectReshape(const Dims &newDims, keel::Allocator *alloc = nullptr) const;
     Value objectTranspose(keel::Allocator *alloc = nullptr) const;
@@ -245,9 +242,9 @@ public:
                        keel::Allocator *alloc = nullptr) const;
     static Value objectConcatN(const Value *parts, keel::usize count, const Dims &outDims,
                                keel::Allocator *alloc = nullptr);
-    void objectAssignLinear(const std::vector<keel::usize> &pos, const Value &rhs,
+    void objectAssignLinear(keel::ArrayRef<keel::usize> pos, const Value &rhs,
                             const Value &fill, keel::Allocator *alloc = nullptr);
-    void objectAssignND(const std::vector<std::vector<keel::usize>> &perDim, const Value &rhs,
+    void objectAssignND(keel::ArrayRef<keel::Array<keel::usize>> perDim, const Value &rhs,
                         const Value &fill, keel::Allocator *alloc = nullptr);
 
     // ── Const raw access ─────────────────────────────────────
@@ -261,7 +258,7 @@ public:
     const char      *charData() const;
     keel::f64 toScalar() const;
     bool toBool() const;
-    std::string toString() const;
+    keel::String toString() const;
 
     // ── Const typed access — single ────────────────────────────
     const keel::f32 *singleData() const;
@@ -311,7 +308,7 @@ public:
     // ── Char element access ──────────────────────────────────
     char charElem(keel::usize i) const;
     char &charElemMut(keel::usize i);
-    std::string charRow(keel::usize r) const;
+    keel::String charRow(keel::usize r) const;
 
     // ── Resize ───────────────────────────────────────────────
     void resize(keel::usize newRows, keel::usize newCols, keel::Allocator *alloc = nullptr);
@@ -337,35 +334,35 @@ public:
     const keel::Array<Value> &cellDataVec() const;
 
     // ── Struct ───────────────────────────────────────────────
-    Value &field(const std::string &name);
-    const Value &field(const std::string &name) const;
-    bool hasField(const std::string &name) const;
-    std::map<std::string, Value> &structFields();
-    const std::map<std::string, Value> &structFields() const;
+    Value &field(keel::StringRef name);
+    const Value &field(keel::StringRef name) const;
+    bool hasField(keel::StringRef name) const;
+    keel::HashMap<keel::String, Value> &structFields();
+    const keel::HashMap<keel::String, Value> &structFields() const;
 
-    void setField(keel::usize linearIdx, const std::string &name, const Value &v);
-    void setFieldAll(const std::string &name, const Value &v);
-    void removeField(const std::string &name);
-    std::vector<std::string> fieldNamesInOrder() const;
+    void setField(keel::usize linearIdx, keel::StringRef name, const Value &v);
+    void setFieldAll(keel::StringRef name, const Value &v);
+    void removeField(keel::StringRef name);
+    keel::Array<keel::String> fieldNamesInOrder() const;
 
     bool isStructArray() const;
-    std::map<std::string, Value> &structArrayElem(keel::usize i);
+    keel::HashMap<keel::String, Value> &structArrayElem(keel::usize i);
     void growStructArrayTo(keel::usize idx, keel::Allocator *alloc = nullptr);
     keel::usize growStructArrayND(const keel::usize *coords, keel::i32 nd,
                                   keel::Allocator *alloc = nullptr);
-    const std::map<std::string, Value> &structArrayElem(keel::usize i) const;
+    const keel::HashMap<keel::String, Value> &structArrayElem(keel::usize i) const;
 
     // ── Func handle ──────────────────────────────────────────
-    std::string funcHandleName() const;
-    std::string funcHandleSource() const;
-    void setFuncHandleSource(const std::string &source);
+    keel::String funcHandleName() const;
+    keel::String funcHandleSource() const;
+    void setFuncHandleSource(keel::StringRef source);
     keel::usize funcHandleCaptureCount() const;
     const Value &funcHandleCapture(keel::usize i) const;
     void setFuncHandleCaptures(const Value *captures, keel::usize count);
 
     // ── Debug ────────────────────────────────────────────────
-    std::string debugString() const;
-    std::string formatDisplay(const std::string &name) const;
+    keel::String debugString() const;
+    keel::String formatDisplay(keel::StringRef name) const;
 
     // ── Fast scalar access for VM ────────────────────────────
     bool isDoubleScalar() const { return heap_ == nullptr; }
@@ -469,7 +466,7 @@ private:
     }
     bool isHeap() const { return reinterpret_cast<keel::usize>(heap_) > 4; }
 
-    void releaseHeap();
+    void releaseHeap() noexcept;
     void detach();
     HeapObject *mutableHeap();
     static Value concatStructs(const Value *elems, keel::usize count, bool vertical,

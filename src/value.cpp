@@ -2,16 +2,17 @@
 #include <numkit/value/value.hpp>
 #include <numkit/value/object.hpp> // ObjectState (deepCopy) for object arrays
 
+#include <keel/algo.h>
 #include <keel/bits.h>
+#include <keel/format.h>
 #include <keel/math.h>
+#include <keel/memory.h>
+#include <keel/number.h>
+#include <keel/small_array.h>
+#include <keel/string.h>
 
-#include <algorithm>
 #include <cmath>
-#include <cstring>
-#include <limits>
-#include <sstream>
 #include <stdexcept>
-#include <type_traits>
 
 namespace numkit {
 
@@ -65,7 +66,7 @@ Value::Value()
     : scalar_(0.0)
     , heap_(emptyTag())
 {}
-Value::~Value()
+Value::~Value() noexcept
 {
     releaseHeap();
 }
@@ -107,14 +108,14 @@ Value &Value::operator=(Value &&o) noexcept
 }
 void Value::swap(Value &o) noexcept
 {
-    std::swap(scalar_, o.scalar_);
-    std::swap(heap_, o.heap_);
+    keel::swap(scalar_, o.scalar_);
+    keel::swap(heap_, o.heap_);
 }
-void Value::releaseHeap()
+void Value::releaseHeap() noexcept
 {
     if (isHeap()) {
         if (heap_->release())
-            delete heap_;
+            HeapObject::destroy(heap_);
     }
     heap_ = emptyTag();
 }
@@ -148,7 +149,7 @@ Value Value::makeContiguous(const void *src, size_t count,
 {
     Value v = Value::matrix(1, count, type, mr);
     if (count > 0 && src != nullptr) {
-        std::memcpy(v.rawDataMut(), src, count * elemSize);
+        keel::mem_copy(v.rawDataMut(), src, count * elemSize);
     }
     return v;
 }
@@ -163,15 +164,12 @@ Value::Value(std::initializer_list<double> il, keel::Allocator *mr)
 Value Value::view(const void *data, ValueType type, Dims dims)
 {
     Value v;
-    auto *h = new HeapObject();
+    HeapGuard h(HeapObject::create(keel::default_allocator()));
     h->type = type;
-    h->dims = std::move(dims);
-    h->alloc = keel::default_allocator();
+    h->dims = keel::move(dims);
     const size_t bytes = h->dims.numel() * elementSize(type);
-    h->buffer = new DataBuffer(DataBuffer::ViewTag{},
-                                const_cast<void *>(data),
-                                bytes);
-    v.heap_ = h;
+    h->buffer = DataBuffer::createView(const_cast<void *>(data), bytes);
+    v.heap_ = h.release();
     return v;
 }
 
@@ -195,13 +193,12 @@ Value Value::matrix(size_t rows, size_t cols, ValueType t, keel::Allocator *mr)
     const size_t total = checkedMulSize(rows, cols);
     const size_t bytes = checkedMulSize(total, elementSize(t));
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = t;
     h->dims = {rows, cols};
-    h->alloc = mr;
     if (bytes > 0) {
-        h->buffer = new DataBuffer(bytes, mr);
-        std::memset(h->buffer->data(), 0, bytes);
+        h->buffer = DataBuffer::create(bytes, h->alloc);
+        keel::mem_zero(h->buffer->data(), bytes);
     }
     m.heap_ = h.release();
     return m;
@@ -211,13 +208,12 @@ Value Value::matrix3d(size_t rows, size_t cols, size_t pages, ValueType t, keel:
     const size_t total = checkedMulSize(checkedMulSize(rows, cols), pages);
     const size_t bytes = checkedMulSize(total, elementSize(t));
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = t;
     h->dims = {rows, cols, pages};
-    h->alloc = mr;
     if (bytes > 0) {
-        h->buffer = new DataBuffer(bytes, mr);
-        std::memset(h->buffer->data(), 0, bytes);
+        h->buffer = DataBuffer::create(bytes, h->alloc);
+        keel::mem_zero(h->buffer->data(), bytes);
     }
     m.heap_ = h.release();
     return m;
@@ -237,60 +233,53 @@ Value Value::matrixND(const size_t *dims, int nd, ValueType t, keel::Allocator *
     const size_t total = checkedMulDims(dims, nd);
     const size_t bytes = checkedMulSize(total, elementSize(t));
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = t;
-    h->dims = std::move(newDims);
-    h->alloc = mr;
+    h->dims = keel::move(newDims);
     if (bytes > 0) {
-        h->buffer = new DataBuffer(bytes, mr);
-        std::memset(h->buffer->data(), 0, bytes);
+        h->buffer = DataBuffer::create(bytes, h->alloc);
+        keel::mem_zero(h->buffer->data(), bytes);
     }
     m.heap_ = h.release();
     return m;
 }
-Value Value::fromString(const std::string &s, keel::Allocator *mr)
+Value Value::fromString(keel::StringRef s, keel::Allocator *mr)
 {
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::CHAR;
     h->dims = {1, s.size()};
-    h->alloc = mr;
     if (!s.empty()) {
-        h->buffer = new DataBuffer(s.size(), mr);
-        std::memcpy(h->buffer->data(), s.data(), s.size());
+        h->buffer = DataBuffer::create(s.size(), h->alloc);
+        keel::mem_copy(h->buffer->data(), s.data(), s.size());
     }
     m.heap_ = h.release();
     return m;
 }
 Value Value::cell(size_t rows, size_t cols, keel::Allocator *mr)
 {
-    if (!mr) mr = keel::default_allocator();
     const size_t total = checkedMulSize(rows, cols);
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::CELL;
     h->dims = {rows, cols};
-    h->alloc = mr;
-    h->cellData = new keel::Array<Value>(total, mr);
+    h->cellData = h->allocNew<keel::Array<Value>>(total, h->alloc);
     m.heap_ = h.release();
     return m;
 }
 Value Value::cell3D(size_t rows, size_t cols, size_t pages, keel::Allocator *mr)
 {
-    if (!mr) mr = keel::default_allocator();
     const size_t total = checkedMulSize(checkedMulSize(rows, cols), pages);
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::CELL;
     h->dims = {rows, cols, pages};
-    h->alloc = mr;
-    h->cellData = new keel::Array<Value>(total, mr);
+    h->cellData = h->allocNew<keel::Array<Value>>(total, h->alloc);
     m.heap_ = h.release();
     return m;
 }
 Value Value::cellND(const size_t *dims, int nd, keel::Allocator *mr)
 {
-    if (!mr) mr = keel::default_allocator();
     if (nd <= 0) return cell(0, 0, mr);
     if (nd == 1) return cell(dims[0], 1, mr);
     if (nd == 2) return cell(dims[0], dims[1], mr);
@@ -298,11 +287,10 @@ Value Value::cellND(const size_t *dims, int nd, keel::Allocator *mr)
     Dims newDims(dims, nd);
     const size_t total = checkedMulDims(dims, nd);
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::CELL;
-    h->dims = std::move(newDims);
-    h->alloc = mr;
-    h->cellData = new keel::Array<Value>(total, mr);
+    h->dims = keel::move(newDims);
+    h->cellData = h->allocNew<keel::Array<Value>>(total, h->alloc);
     m.heap_ = h.release();
     return m;
 }
@@ -311,14 +299,12 @@ Value Value::csl(size_t n, keel::Allocator *mr)
     // A comma-separated list is stored exactly like a 1xn cell (shared cellData
     // backing); only the type tag distinguishes it. Producers fill the slots via
     // cslAt()/cellAt(); splicing contexts read cslCount() + cslAt().
-    if (!mr) mr = keel::default_allocator();
     Value m;
-    auto *h = new HeapObject();
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::CSL;
     h->dims = {1, n};
-    h->alloc = mr;
-    h->cellData = new keel::Array<Value>(n, mr);
-    m.heap_ = h;
+    h->cellData = h->allocNew<keel::Array<Value>>(n, h->alloc);
+    m.heap_ = h.release();
     return m;
 }
 Value collapseCsl(Value v)
@@ -327,58 +313,53 @@ Value collapseCsl(Value v)
         return v;  // pass-through: a non-CSL value is already a single value
     size_t n = v.cslCount();
     if (n == 1)
-        return std::move(v.cslAt(0));  // unwrap the sole element
+        return keel::move(v.cslAt(0));  // unwrap the sole element
+    if (n == 0) {
+        throw std::runtime_error(
+            "Insufficient number of values: a comma-separated list expanded to 0 "
+            "values where 1 is required");
+    }
     throw std::runtime_error(
-        n == 0
-            ? "Insufficient number of values: a comma-separated list expanded to 0 "
-              "values where 1 is required"
-            : "Too many values: a comma-separated list expanded to " + std::to_string(n)
-                  + " values where 1 is required");
+        keel::format_small<128>(
+            "Too many values: a comma-separated list expanded to {} values where 1 is required",
+            n).c_str());
 }
 
-Value Value::stringScalar(const std::string &s, keel::Allocator *mr)
+Value Value::stringScalar(keel::StringRef s, keel::Allocator *mr)
 {
-    if (!mr) mr = keel::default_allocator();
     Value m;
-    auto *h = new HeapObject();
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::STRING;
     h->dims = {1, 1};
-    h->alloc = mr;
-    h->cellData = new keel::Array<Value>(1, Value::fromString(s, mr), mr);
-    m.heap_ = h;
+    h->cellData = h->allocNew<keel::Array<Value>>(1, Value::fromString(s, h->alloc), h->alloc);
+    m.heap_ = h.release();
     return m;
 }
 Value Value::stringArray(size_t rows, size_t cols, keel::Allocator *mr)
 {
-    if (!mr) mr = keel::default_allocator();
     const size_t total = checkedMulSize(rows, cols);
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::STRING;
     h->dims = {rows, cols};
-    h->alloc = mr;
     // Initialize with empty strings
-    h->cellData = new keel::Array<Value>(total, Value::fromString("", mr), mr);
+    h->cellData = h->allocNew<keel::Array<Value>>(total, Value::fromString("", h->alloc), h->alloc);
     m.heap_ = h.release();
     return m;
 }
 Value Value::stringArray3D(size_t rows, size_t cols, size_t pages, keel::Allocator *mr)
 {
-    if (!mr) mr = keel::default_allocator();
     const size_t total = checkedMulSize(checkedMulSize(rows, cols), pages);
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::STRING;
     h->dims = {rows, cols, pages};
-    h->alloc = mr;
-    h->cellData = new keel::Array<Value>(total,
-                                               Value::fromString("", mr), mr);
+    h->cellData = h->allocNew<keel::Array<Value>>(total, Value::fromString("", h->alloc), h->alloc);
     m.heap_ = h.release();
     return m;
 }
 Value Value::stringArrayND(const size_t *dims, int nd, keel::Allocator *mr)
 {
-    if (!mr) mr = keel::default_allocator();
     if (nd <= 0) return stringArray(0, 0, mr);
     if (nd == 1) return stringArray(dims[0], 1, mr);
     if (nd == 2) return stringArray(dims[0], dims[1], mr);
@@ -386,21 +367,20 @@ Value Value::stringArrayND(const size_t *dims, int nd, keel::Allocator *mr)
     Dims newDims(dims, nd);
     const size_t total = checkedMulDims(dims, nd);
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::STRING;
-    h->dims = std::move(newDims);
-    h->alloc = mr;
-    h->cellData = new keel::Array<Value>(total, Value::fromString("", mr), mr);
+    h->dims = keel::move(newDims);
+    h->cellData = h->allocNew<keel::Array<Value>>(total, Value::fromString("", h->alloc), h->alloc);
     m.heap_ = h.release();
     return m;
 }
-std::string Value::stringElem(size_t i) const
+keel::String Value::stringElem(size_t i) const
 {
     if (!isHeap() || heap_->type != ValueType::STRING || !heap_->cellData || i >= heap_->cellData->size())
         return {};
     return (*heap_->cellData)[i].toString();
 }
-void Value::stringElemSet(size_t i, const std::string &s)
+void Value::stringElemSet(size_t i, keel::StringRef s)
 {
     if (!isHeap() || heap_->type != ValueType::STRING || !heap_->cellData)
         throw std::runtime_error("Not a string array");
@@ -416,57 +396,61 @@ Value Value::structure(keel::Allocator *mr)
 
 Value Value::structArray(size_t rows, size_t cols, keel::Allocator *mr)
 {
-    if (!mr) mr = keel::default_allocator();
     const size_t n = checkedMulSize(rows, cols);
     Value m;
-    std::unique_ptr<HeapObject> h(new HeapObject());
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::STRUCT;
     h->dims = {rows, cols};
-    h->alloc = mr;
-    h->structArray = new std::vector<std::map<std::string, Value>>(n);
-    h->fieldOrder = new std::vector<std::string>();
+    h->structArray = h->allocNew<keel::Array<keel::HashMap<keel::String, Value>>>(h->alloc);
+    h->structArray->reserve(n);
+    for (size_t i = 0; i < n; ++i)
+        h->structArray->push_back(keel::HashMap<keel::String, Value>(h->alloc));
+    h->fieldOrder = h->allocNew<keel::Array<keel::String>>(h->alloc);
     m.heap_ = h.release();
     return m;
 }
-Value Value::funcHandle(const std::string &name, keel::Allocator *mr)
+Value Value::funcHandle(keel::StringRef name, keel::Allocator *mr)
 {
     Value m;
-    auto *h = new HeapObject();
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::FUNC_HANDLE;
     h->dims = {1, 1};
-    h->alloc = mr;
-    h->funcName = new std::string(name);
-    m.heap_ = h;
+    h->funcName = h->allocNew<keel::String>(name, h->alloc);
+    m.heap_ = h.release();
     return m;
 }
-Value Value::object(const std::string &className,
-                    std::shared_ptr<ObjectState> state, bool isHandle,
+Value Value::object(keel::StringRef className,
+                    keel::Arc<ObjectState> state, bool isHandle,
                     keel::Allocator *mr)
 {
     Value m;
-    auto *h = new HeapObject();
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::OBJECT;
     h->dims = {1, 1}; // scalar object = 1×1 array of one state
-    h->alloc = mr;
-    h->objClass = new std::string(className);
-    h->objStates.push_back(std::move(state));
+    h->objClass = h->allocNew<keel::String>(className, h->alloc);
+    h->objStates.push_back(keel::move(state));
     h->objIsHandle = isHandle;
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
-Value Value::objectArray(const std::string &className, const Dims &dims,
-                         std::vector<std::shared_ptr<ObjectState>> states, bool isHandle,
+Value Value::objectArray(keel::StringRef className, const Dims &dims,
+                         keel::Array<keel::Arc<ObjectState>> states, bool isHandle,
                          keel::Allocator *mr)
 {
     Value m;
-    auto *h = new HeapObject();
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::OBJECT;
     h->dims = dims;
-    h->alloc = mr;
-    h->objClass = new std::string(className);
-    h->objStates = std::move(states);
+    h->objClass = h->allocNew<keel::String>(className, h->alloc);
+    if (states.allocator() == h->alloc) {
+        h->objStates = keel::move(states);
+    } else {
+        h->objStates.reserve(states.size());
+        for (auto &s : states)
+            h->objStates.push_back(keel::move(s));
+    }
     h->objIsHandle = isHandle;
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
 // ============================================================
@@ -474,13 +458,13 @@ Value Value::objectArray(const std::string &className, const Dims &dims,
 // ============================================================
 size_t Value::colonCount(double start, double step, double stop)
 {
-    if (std::isnan(start) || std::isnan(step) || std::isnan(stop))
+    if (keel::is_nan(start) || keel::is_nan(step) || keel::is_nan(stop))
         return 0; // MATLAB: NaN in colon produces empty
-    if (std::isinf(start) || std::isinf(stop))
+    if (keel::is_inf(start) || keel::is_inf(stop))
         throw std::runtime_error("Maximum variable size allowed by the program is exceeded");
     if (step == 0.0)
         throw std::runtime_error("Colon step cannot be zero");
-    if (std::isinf(step))
+    if (keel::is_inf(step))
         return (step > 0 && stop >= start) || (step < 0 && stop <= start) ? 1 : 0;
     if ((step > 0 && stop < start) || (step < 0 && stop > start))
         return 0;
@@ -490,17 +474,17 @@ size_t Value::colonCount(double start, double step, double stop)
     // clean integer steps (e.g. 1:2:10 gives 5, not 6 — see Value's
     // own gtest and MATLAB parity).
     const double rng = (stop - start) / step;
-    const double tol = 3.0 * std::numeric_limits<double>::epsilon()
-                           * std::max(std::abs(start), std::abs(stop))
-                           / std::abs(step);
+    const double tol = 3.0 * keel::Limits<double>::kEpsilon
+                           * keel::max(keel::abs(start), keel::abs(stop))
+                           / keel::abs(step);
     double n = std::floor(rng + tol) + 1;
     if (n < 0)
         n = 0;
     double last = start + (n - 1) * step;
     // Trim only when truly past the stop (beyond tol).
-    if (step > 0 && last > stop + tol * std::abs(step))
+    if (step > 0 && last > stop + tol * keel::abs(step))
         n--;
-    if (step < 0 && last < stop - tol * std::abs(step))
+    if (step < 0 && last < stop - tol * keel::abs(step))
         n--;
     if (n < 0)
         n = 0;
@@ -544,7 +528,7 @@ Value Value::colonRangeTyped(double start, double step, double stop,
     Value result = Value::matrix(1, count, t, mr);
     if (count == 0) return result;
     auto write_loop = [&](auto *dp, auto /*tag*/) {
-        using T = std::remove_pointer_t<decltype(dp)>;
+        using T = keel::RemovePointer<decltype(dp)>;
         for (size_t i = 0; i < count; ++i)
             dp[i] = static_cast<T>(start + static_cast<double>(i) * step);
         if (count >= 2) {
@@ -619,8 +603,8 @@ static ValueType promoteNumericType(const Value *elems, size_t count)
             break;
         default:
             throw std::runtime_error(
-                std::string("Concatenation not supported for type '")
-                + mtypeName(elems[i].type()) + "'");
+                keel::format_small<96>("Concatenation not supported for type '{}'",
+                                       mtypeName(elems[i].type())).c_str());
         }
     }
     if (hasInt)
@@ -649,7 +633,7 @@ static Value castConcatToInteger(const Value &d, ValueType vt,
     const size_t n = d.numel();
     const double *src = d.doubleData();
     auto fill = [&](auto *dst) {
-        using T = std::remove_pointer_t<std::decay_t<decltype(dst)>>;
+        using T = keel::RemovePointer<keel::RemoveCvRef<decltype(dst)>>;
         for (size_t i = 0; i < n; ++i)
             dst[i] = roundSaturateInt<T>(src[i]);
     };
@@ -692,13 +676,13 @@ double Value::elemAsDouble(size_t idx) const
         if (st && st->native)
             return st->native->asDouble();
         throw std::runtime_error(
-            std::string("Cannot read element as double from type '")
-            + mtypeName(type()) + "'");
+            keel::format_small<96>("Cannot read element as double from type '{}'",
+                                   mtypeName(type())).c_str());
     }
     default:
         throw std::runtime_error(
-            std::string("Cannot read element as double from type '")
-            + mtypeName(type()) + "'");
+            keel::format_small<96>("Cannot read element as double from type '{}'",
+                                   mtypeName(type())).c_str());
     }
 }
 
@@ -718,8 +702,8 @@ static keel::c64 readElemAsComplex(const Value &v, size_t idx)
         return keel::c64(v.elemAsDouble(idx), 0.0);
     default:
         throw std::runtime_error(
-            std::string("Cannot read element as complex from type '")
-            + mtypeName(v.type()) + "'");
+            keel::format_small<96>("Cannot read element as complex from type '{}'",
+                                   mtypeName(v.type())).c_str());
     }
 }
 
@@ -741,8 +725,8 @@ static uint8_t readElemAsLogical(const Value &v, size_t idx)
         return (v.complexData()[idx] != keel::c64(0.0, 0.0)) ? 1 : 0;
     default:
         throw std::runtime_error(
-            std::string("Cannot read element as logical from type '")
-            + mtypeName(v.type()) + "'");
+            keel::format_small<96>("Cannot read element as logical from type '{}'",
+                                   mtypeName(v.type())).c_str());
     }
 }
 
@@ -784,7 +768,7 @@ static int collectHigherDims(const Value *elems, size_t count, size_t (&higherDi
     int maxNd = 2;
     for (size_t i = 0; i < count; ++i)
         if (!elems[i].isEmpty())
-            maxNd = std::max(maxNd, elems[i].dims().ndim());
+            maxNd = keel::max(maxNd, elems[i].dims().ndim());
     if (maxNd > Dims::kMaxRank)
         throw std::runtime_error("Maximum array dimensionality exceeded");
     for (int k = 2; k < maxNd; ++k) {
@@ -837,27 +821,36 @@ Value Value::concatStructs(const Value *elems, size_t count, bool vertical,
 {
     if (!mr)
         mr = keel::default_allocator();
-    std::vector<const Value *> ops;
+    keel::SmallArray<const Value *, 8> ops(mr);
     for (size_t i = 0; i < count; ++i) {
         if (elems[i].isEmpty())
             continue;
         if (!elems[i].isStruct())
             throw std::runtime_error(
-                std::string("Conversion to struct from ")
-                + mtypeName(elems[i].type()) + " is not possible");
+                keel::format_small<128>("Conversion to struct from {} is not possible",
+                                        mtypeName(elems[i].type())).c_str());
         ops.push_back(&elems[i]);
     }
     if (ops.empty())
         return Value::matrix(0, 0, ValueType::DOUBLE, mr);
 
-    const std::vector<std::string> fields0 = ops[0]->fieldNamesInOrder();
+    const keel::Array<keel::String> fields0 = ops[0]->fieldNamesInOrder();
     {
-        std::vector<std::string> sorted0 = fields0;
-        std::sort(sorted0.begin(), sorted0.end());
+        keel::Array<keel::String> sorted0 = fields0.clone(mr);
+        keel::sort(sorted0);
         for (size_t k = 1; k < ops.size(); ++k) {
-            std::vector<std::string> fk = ops[k]->fieldNamesInOrder();
-            std::sort(fk.begin(), fk.end());
-            if (fk != sorted0)
+            keel::Array<keel::String> fk = ops[k]->fieldNamesInOrder();
+            keel::sort(fk);
+            bool same = (fk.size() == sorted0.size());
+            if (same) {
+                for (size_t j = 0; j < fk.size(); ++j) {
+                    if (fk[j] != sorted0[j]) {
+                        same = false;
+                        break;
+                    }
+                }
+            }
+            if (!same)
                 throw std::runtime_error(
                     "Names of fields in structure arrays being concatenated "
                     "do not match. Concatenation of structure arrays "
@@ -866,7 +859,7 @@ Value Value::concatStructs(const Value *elems, size_t count, bool vertical,
         }
     }
 
-    auto srcElem = [](const Value &v, size_t flat) -> const std::map<std::string, Value> & {
+    auto srcElem = [](const Value &v, size_t flat) -> const keel::HashMap<keel::String, Value> & {
         return v.isStructArray() ? v.structArrayElem(flat) : v.structFields();
     };
 
@@ -876,7 +869,7 @@ Value Value::concatStructs(const Value *elems, size_t count, bool vertical,
         const size_t r = op->dims().rows(), c = op->dims().cols();
         totalA += vertical ? r : c;
         if (op->numel() == 0) {
-            b = std::max(b, vertical ? c : r);
+            b = keel::max(b, vertical ? c : r);
         } else {
             const size_t other = vertical ? c : r;
             if (bSet && b != other)
@@ -900,10 +893,9 @@ Value Value::concatStructs(const Value *elems, size_t count, bool vertical,
                 const size_t dst = vertical ? cc * rows + (off + rr)
                                             : (off + cc) * rows + rr;
                 const auto &m = srcElem(*op, src);
-                for (const std::string &name : fields0) {
-                    auto it = m.find(name);
-                    if (it != m.end())
-                        out.setField(dst, name, it->second);
+                for (const keel::String &name : fields0) {
+                    if (const Value *vp = m.get(name))
+                        out.setField(dst, name, *vp);
                 }
             }
         }
@@ -921,8 +913,7 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
 {
     if (!mr)
         mr = keel::default_allocator();
-    std::string clsName;
-    bool found = false;
+    keel::String clsName(mr);
     bool handle = false;
     const NativePayload *protoNative = nullptr;
     for (size_t i = 0; i < count; ++i) {
@@ -931,16 +922,15 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
             handle = elems[i].objectIsHandle();
             if (const ObjectState *st = elems[i].objectStateConst())
                 protoNative = st->native.get();
-            found = true;
             break;
         }
     }
     const bool canPromoteNumeric =
-        protoNative && (protoNative->fromScalarDouble(0.0) != nullptr);
+        protoNative && (protoNative->fromScalarDouble(0.0, mr) != nullptr);
 
-    std::vector<Value> promotedStorage;
+    keel::Array<Value> promotedStorage(mr);
     promotedStorage.reserve(count);
-    std::vector<const Value *> ops;
+    keel::SmallArray<const Value *, 8> ops(mr);
     ops.reserve(count);
 
     for (size_t i = 0; i < count; ++i) {
@@ -949,37 +939,38 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
         if (!elems[i].isObject()) {
             if (canPromoteNumeric && (elems[i].isNumeric() || elems[i].isLogical())) {
                 const size_t n = elems[i].numel();
-                std::vector<std::shared_ptr<ObjectState>> states(n);
+                keel::Array<keel::Arc<ObjectState>> states(mr);
+                states.reserve(n);
                 for (size_t k = 0; k < n; ++k) {
-                    auto st = std::make_shared<ObjectState>(mr);
-                    st->native = protoNative->fromScalarDouble(elems[i].elemAt(k).toScalar());
-                    states[k] = std::move(st);
+                    auto st = keel::make_arc_in<ObjectState>(mr, mr);
+                    st->native = protoNative->fromScalarDouble(elems[i].elemAt(k).toScalar(), mr);
+                    states.push_back(keel::move(st));
                 }
                 promotedStorage.push_back(
-                    Value::objectArray(clsName, elems[i].dims(), std::move(states), handle, mr));
+                    Value::objectArray(clsName, elems[i].dims(), keel::move(states), handle, mr));
                 continue;
             }
             throw std::runtime_error(
                 "Cannot concatenate an object with a non-object value");
         }
-        if (elems[i].objectClassName() != clsName) {
-            auto isGraphicsCls = [](const std::string &c) {
-                return c.rfind("matlab.graphics.", 0) == 0 || c.rfind("matlab.ui.", 0) == 0;
+        const keel::String otherCls = elems[i].objectClassName();
+        if (otherCls != clsName) {
+            auto isGraphicsCls = [](keel::StringRef c) {
+                return c.starts_with("matlab.graphics.") || c.starts_with("matlab.ui.");
             };
-            if (isGraphicsCls(clsName) && isGraphicsCls(elems[i].objectClassName())) {
-                clsName = "matlab.graphics.Graphics";
+            if (isGraphicsCls(clsName) && isGraphicsCls(otherCls)) {
+                clsName.assign("matlab.graphics.Graphics");
             } else {
                 throw std::runtime_error(
                     "Cannot concatenate objects of different classes");
             }
         }
     }
-    auto *h = new HeapObject();
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::OBJECT;
-    h->alloc = mr;
-    h->objClass = new std::string(clsName);
+    h->objClass = h->allocNew<keel::String>(clsName, h->alloc);
     h->objIsHandle = handle;
-    auto pushState = [&](const std::shared_ptr<ObjectState> &st) {
+    auto pushState = [&](const keel::Arc<ObjectState> &st) {
         h->objStates.push_back((handle || !st) ? st : st->deepCopy(mr));
     };
     // Gather the non-empty object operands (column-major storage + dims).
@@ -1027,7 +1018,7 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
         h->dims = Dims(rows, cols);
     }
     Value out;
-    out.heap_ = h;
+    out.heap_ = h.release();
     return out;
 }
 
@@ -1095,24 +1086,24 @@ Value Value::horzcat(const Value *elems, size_t count, keel::Allocator *mr)
             else if (rows != eR) sameRows = false;
             totalCols += eC;
         }
-        std::string result;
+        keel::String result(mr);
         for (size_t i = 0; i < count; ++i) {
             if (elems[i].isEmpty())
                 continue;
             if (elems[i].type() == ValueType::CHAR) {
-                result.append(elems[i].charData(), elems[i].numel());
+                result.append(keel::StringRef(elems[i].charData(), elems[i].numel()));
             } else if (elems[i].isScalar()) {
-                result += static_cast<char>(static_cast<int>(std::round(elems[i].toScalar())));
+                result.push_back(static_cast<char>(keel::round_i32(elems[i].toScalar())));
             } else {
                 // Non-scalar double/logical: convert each element to char
                 const double *d = elems[i].doubleData();
                 for (size_t k = 0; k < elems[i].numel(); ++k)
-                    result += static_cast<char>(static_cast<int>(std::round(d[k])));
+                    result.push_back(static_cast<char>(keel::round_i32(d[k])));
             }
         }
         if (multiRow && sameRows && rows > 1 && rows * totalCols == result.size()) {
             Value out = Value::matrix(rows, totalCols, ValueType::CHAR, mr);
-            std::memcpy(out.charDataMut(), result.data(), result.size());
+            keel::mem_copy(out.charDataMut(), result.data(), result.size());
             return out;
         }
         return Value::fromString(result, mr);
@@ -1134,12 +1125,12 @@ Value Value::horzcat(const Value *elems, size_t count, keel::Allocator *mr)
             getElemDims(elems[i], eR, eC, eP);
             totalCols += eC;
             if (elems[i].isEmpty()) {
-                rows = std::max(rows, eR);
+                rows = keel::max(rows, eR);
             } else {
                 matchDim(rows, eR, rowsSet);
             }
         }
-        auto result = Value::cell(rows, totalCols);
+        auto result = Value::cell(rows, totalCols, mr);
         size_t colOff = 0;
         for (size_t i = 0; i < count; ++i) {
             if (elems[i].isEmpty() || elems[i].type() != ValueType::CELL)
@@ -1168,8 +1159,8 @@ Value Value::horzcat(const Value *elems, size_t count, keel::Allocator *mr)
             // [zeros(0,2), zeros(0,2)] is 0x4, [zeros(3,0), 5] is 3x1.
             emptyCols += eC;
             if (!rowsSet)
-                rows = std::max(rows, eR);
-            pages = std::max(pages, eP);
+                rows = keel::max(rows, eR);
+            pages = keel::max(pages, eP);
         } else {
             totalCols += eC;
             matchDim(rows, eR, rowsSet);
@@ -1269,8 +1260,8 @@ Value Value::vertcat(const Value *elems, size_t count, keel::Allocator *mr)
             // (bugs/closed/lang/vertcat-all-empty).
             emptyRows += eR;
             if (!colsSet)
-                cols = std::max(cols, eC);
-            pages = std::max(pages, eP);
+                cols = keel::max(cols, eC);
+            pages = keel::max(pages, eP);
         } else {
             totalRows += eR;
             matchDim(cols, eC, colsSet);
@@ -1312,8 +1303,8 @@ Value Value::vertcat(const Value *elems, size_t count, keel::Allocator *mr)
                 for (size_t c = 0; c < eC; ++c)
                     for (size_t r = 0; r < eR; ++r)
                         dst[c * totalRows + rowOff + r] =
-                            static_cast<char>(static_cast<int>(std::round(
-                                elems[i].elemAsDouble(c * eR + r))));
+                            static_cast<char>(keel::round_i32(
+                                elems[i].elemAsDouble(c * eR + r)));
             }
             rowOff += eR;
         }
@@ -1322,7 +1313,7 @@ Value Value::vertcat(const Value *elems, size_t count, keel::Allocator *mr)
 
     // Cell vertcat: combine rows into a 2D cell (column-major)
     if (hasCell) {
-        auto result = Value::cell(totalRows, cols);
+        auto result = Value::cell(totalRows, cols, mr);
         size_t rowOff = 0;
         for (size_t i = 0; i < count; ++i) {
             if (elems[i].isEmpty())
@@ -1363,7 +1354,7 @@ Value Value::vertcat(const Value *elems, size_t count, keel::Allocator *mr)
                                               elems[i].stringElem(c * eR + r));
             } else if (elems[i].isChar() || elems[i].isScalar()) {
                 // single char / numeric scalar → broadcast 1 string per cell.
-                const std::string s = elems[i].toString();
+                const keel::String s = elems[i].toString();
                 for (size_t c = 0; c < eC; ++c)
                     for (size_t r = 0; r < eR; ++r)
                         result.stringElemSet((c) * totalRows + (rowOff + r), s);
@@ -1439,13 +1430,13 @@ Value Value::elemAt(size_t idx, keel::Allocator *mr) const
         // isreal(z(k)) per element). Covers VM/TW scalar-index fast paths too.
         Value s = Value::complexScalar(complexData()[idx], mr);
         s.setSingleComplex(isSingleComplex());
-        return narrowComplex(std::move(s), mr);
+        return narrowComplex(keel::move(s), mr);
     }
     case ValueType::LOGICAL:
         return Value::logicalScalar(logicalData()[idx] != 0, mr);
     case ValueType::CHAR: {
-        std::string s(1, charData()[idx]);
-        return Value::fromString(s, mr);
+        const char ch = charData()[idx];
+        return Value::fromString(keel::StringRef(&ch, 1), mr);
     }
     case ValueType::CELL:
         return cellAt(idx);
@@ -1465,11 +1456,8 @@ Value Value::elemAt(size_t idx, keel::Allocator *mr) const
         // mutation paths (`s(1).x = ...`) operate on a fresh map.
         Value out = Value::structure(mr);
         if (heap_->fieldOrder && out.heap_->fieldOrder)
-            *out.heap_->fieldOrder = *heap_->fieldOrder;
-        const auto &src = (*heap_->structArray)[idx];
-        auto &dst = (*out.heap_->structArray)[0];
-        for (const auto &[k, v] : src)
-            dst.emplace(k, v);
+            *out.heap_->fieldOrder = heap_->fieldOrder->clone(out.heap_->alloc);
+        (*out.heap_->structArray)[0] = (*heap_->structArray)[idx].clone(out.heap_->alloc);
         return out;
     }
     // Typed integer / single return a 1×1 array of the same type so the
@@ -1480,13 +1468,13 @@ Value Value::elemAt(size_t idx, keel::Allocator *mr) const
     case ValueType::SINGLE: {
         size_t es = elementSize(t);
         Value r = Value::matrix(1, 1, t, mr);
-        std::memcpy(r.rawDataMut(),
-                    static_cast<const char *>(rawData()) + idx * es, es);
+        keel::mem_copy(r.rawDataMut(),
+                       static_cast<const char *>(rawData()) + idx * es, es);
         return r;
     }
     default:
         throw std::runtime_error(
-            std::string("elemAt not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("elemAt not supported for type '{}'", mtypeName(t)).c_str());
     }
 }
 
@@ -1502,16 +1490,16 @@ Value Value::reshape(size_t rows, size_t cols, keel::Allocator *mr) const
     if (type() == ValueType::STRUCT) {
         Value r = Value::structArray(rows, cols, mr);
         if (heap_->fieldOrder && r.heap_->fieldOrder)
-            *r.heap_->fieldOrder = *heap_->fieldOrder;
+            *r.heap_->fieldOrder = heap_->fieldOrder->clone(r.heap_->alloc);
         const auto &src = *heap_->structArray;
         auto &dst = *r.heap_->structArray;
         for (size_t i = 0; i < src.size() && i < dst.size(); ++i)
-            dst[i] = src[i];
+            dst[i] = src[i].clone(r.heap_->alloc);
         return r;
     }
     if (type() == ValueType::CELL || type() == ValueType::STRING) {
-        Value r = (type() == ValueType::CELL) ? Value::cell(rows, cols)
-                                              : Value::stringArray(rows, cols);
+        Value r = (type() == ValueType::CELL) ? Value::cell(rows, cols, mr)
+                                              : Value::stringArray(rows, cols, mr);
         const auto &src = cellDataVec();
         auto &dst = r.cellDataVec();
         for (size_t i = 0; i < src.size() && i < dst.size(); ++i)
@@ -1521,7 +1509,7 @@ Value Value::reshape(size_t rows, size_t cols, keel::Allocator *mr) const
     Value r = Value::matrix(rows, cols, type(), mr);  // numel>1 -> heap-backed
     r.setSingleComplex(isSingleComplex());
     if (rawBytes() > 0)
-        std::memcpy(r.rawDataMut(), rawData(), rawBytes());
+        keel::mem_copy(r.rawDataMut(), rawData(), rawBytes());
     return r;
 }
 
@@ -1582,7 +1570,7 @@ Value Value::indexGet(const size_t *indices, size_t count, keel::Allocator *mr) 
         const keel::c64 *src = complexData();
         for (size_t i = 0; i < count; ++i)
             dst[i] = src[indices[i]];
-        return narrowComplex(std::move(result), mr);   // all-real slice -> real
+        return narrowComplex(keel::move(result), mr);   // all-real slice -> real
     }
     case ValueType::LOGICAL: {
         auto result = Value::matrix(rr, cc, ValueType::LOGICAL, mr);
@@ -1593,15 +1581,17 @@ Value Value::indexGet(const size_t *indices, size_t count, keel::Allocator *mr) 
         return result;
     }
     case ValueType::CHAR: {
-        std::string s;
-        s.reserve(count);
-        const char *src = charData();
-        for (size_t i = 0; i < count; ++i)
-            s += src[indices[i]];
-        return Value::fromString(s, mr);
+        auto result = Value::matrix(1, count, ValueType::CHAR, mr);
+        if (count > 0) {
+            char *dst = result.charDataMut();
+            const char *src = charData();
+            for (size_t i = 0; i < count; ++i)
+                dst[i] = src[indices[i]];
+        }
+        return result;
     }
     case ValueType::CELL: {
-        auto result = Value::cell(rr, cc);
+        auto result = Value::cell(rr, cc, mr);
         for (size_t i = 0; i < count; ++i)
             result.cellAt(i) = cellAt(indices[i]);
         return result;
@@ -1621,17 +1611,15 @@ Value Value::indexGet(const size_t *indices, size_t count, keel::Allocator *mr) 
         auto result = Value::structArray(rr, cc, mr);
         if (result.heap_->fieldOrder) {
             if (heap_->fieldOrder && !heap_->fieldOrder->empty()) {
-                *result.heap_->fieldOrder = *heap_->fieldOrder;
+                *result.heap_->fieldOrder = heap_->fieldOrder->clone(result.heap_->alloc);
             } else {
                 auto fnms = fieldNamesInOrder();
-                result.heap_->fieldOrder->assign(fnms.begin(), fnms.end());
+                *result.heap_->fieldOrder = fnms.clone(result.heap_->alloc);
             }
         }
         for (size_t i = 0; i < count; ++i) {
             const auto &src = (*heap_->structArray)[indices[i]];
-            auto &dst = (*result.heap_->structArray)[i];
-            for (const auto &[k, v] : src)
-                dst.emplace(k, v);
+            (*result.heap_->structArray)[i] = src.clone(result.heap_->alloc);
         }
         return result;
     }
@@ -1644,12 +1632,12 @@ Value Value::indexGet(const size_t *indices, size_t count, keel::Allocator *mr) 
         const char *src = static_cast<const char *>(rawData());
         char *dst = static_cast<char *>(result.rawDataMut());
         for (size_t i = 0; i < count; ++i)
-            std::memcpy(dst + i * es, src + indices[i] * es, es);
+            keel::mem_copy(dst + i * es, src + indices[i] * es, es);
         return result;
     }
     default:
         throw std::runtime_error(
-            std::string("indexGet not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("indexGet not supported for type '{}'", mtypeName(t)).c_str());
     }
 }
 
@@ -1673,7 +1661,7 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
 
     if (t == ValueType::CELL) {
         auto &d = dims();
-        auto result = Value::cell(nrows, ncols);
+        auto result = Value::cell(nrows, ncols, mr);
         for (size_t c = 0; c < ncols; ++c)
             for (size_t r = 0; r < nrows; ++r)
                 result.cellAt(c * nrows + r) = cellAt(d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c)));
@@ -1681,9 +1669,8 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
     }
     if (t == ValueType::STRING) {
         // String 2-D slice: copy strings element-by-element. STRING
-        // elements live in cellData (vector<Value>), not a contiguous
-        // byte buffer, so the memcpy fast path doesn't apply. See
-        // BUGS.md #7.
+        // elements live in cellData, not a contiguous byte buffer, so the
+        // memcpy fast path doesn't apply. See BUGS.md #7.
         auto &d = dims();
         auto result = Value::stringArray(nrows, ncols, mr);
         for (size_t c = 0; c < ncols; ++c)
@@ -1697,25 +1684,23 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
         auto result = Value::structArray(nrows, ncols, mr);
         if (result.heap_->fieldOrder) {
             if (heap_->fieldOrder && !heap_->fieldOrder->empty()) {
-                *result.heap_->fieldOrder = *heap_->fieldOrder;
+                *result.heap_->fieldOrder = heap_->fieldOrder->clone(result.heap_->alloc);
             } else {
                 auto fnms = fieldNamesInOrder();
-                result.heap_->fieldOrder->assign(fnms.begin(), fnms.end());
+                *result.heap_->fieldOrder = fnms.clone(result.heap_->alloc);
             }
         }
         for (size_t c = 0; c < ncols; ++c) {
             for (size_t r = 0; r < nrows; ++r) {
                 const auto &src = (*heap_->structArray)[d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c))];
-                auto &dst = (*result.heap_->structArray)[c * nrows + r];
-                for (const auto &[k, v] : src)
-                    dst.emplace(k, v);
+                (*result.heap_->structArray)[c * nrows + r] = src.clone(result.heap_->alloc);
             }
         }
         return result;
     }
     if (t == ValueType::OBJECT) {
         auto &d = dims();
-        std::vector<size_t> src(nrows * ncols);
+        keel::SmallArray<size_t, 32> src(nrows * ncols, mr ? mr : keel::default_allocator());
         for (size_t c = 0; c < ncols; ++c)
             for (size_t r = 0; r < nrows; ++r)
                 src[c * nrows + r] = d.sub2ind(subIdx(rowIdx, r), subIdx(colIdx, c));
@@ -1725,7 +1710,7 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
     size_t es = elementSize(t);
     if (es == 0)
         throw std::runtime_error(
-            std::string("indexGet2D not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("indexGet2D not supported for type '{}'", mtypeName(t)).c_str());
 
     auto &d = dims();
     auto result = Value::matrix(nrows, ncols, t, mr);
@@ -1740,15 +1725,15 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
     // Contiguous full-matrix or column-slice fast path when all rows are selected
     if (rowIdx == nullptr && nrows == srcRows) {
         if (colIdx == nullptr && ncols == (srcRows > 0 ? d.numel() / srcRows : d.cols())) {
-            std::memcpy(dst, src, nrows * ncols * es);
+            keel::mem_copy(dst, src, nrows * ncols * es);
         } else {
             const size_t colBytes = nrows * es;
             for (size_t c = 0; c < ncols; ++c) {
                 const size_t sc = subIdx(colIdx, c);
-                std::memcpy(dst + c * colBytes, src + d.sub2ind(0, sc) * es, colBytes);
+                keel::mem_copy(dst + c * colBytes, src + d.sub2ind(0, sc) * es, colBytes);
             }
         }
-        return narrowComplex(std::move(result), mr);
+        return narrowComplex(keel::move(result), mr);
     }
 
     // Typed double fast path (avoids per-element memcpy call overhead)
@@ -1784,16 +1769,16 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
                     anyImag = true;
             }
         }
-        return anyImag ? result : narrowComplex(std::move(result), mr);
+        return anyImag ? result : narrowComplex(keel::move(result), mr);
     }
 
     for (size_t c = 0; c < ncols; ++c) {
         const size_t sc = subIdx(colIdx, c);
         for (size_t r = 0; r < nrows; ++r)
-            std::memcpy(dst + (c * nrows + r) * es,
-                        src + d.sub2ind(subIdx(rowIdx, r), sc) * es, es);
+            keel::mem_copy(dst + (c * nrows + r) * es,
+                           src + d.sub2ind(subIdx(rowIdx, r), sc) * es, es);
     }
-    return narrowComplex(std::move(result), mr);   // all-real complex slice -> real
+    return narrowComplex(keel::move(result), mr);   // all-real complex slice -> real
 }
 
 // 3D slice: extract sub-array at given row/col/page indices (nullptr = full 0..n-1).
@@ -1818,8 +1803,8 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
 
     if (t == ValueType::CELL) {
         auto &d = dims();
-        auto result = squeezePage ? Value::cell(nrows, ncols)
-                                  : Value::cell3D(nrows, ncols, npages);
+        auto result = squeezePage ? Value::cell(nrows, ncols, mr)
+                                  : Value::cell3D(nrows, ncols, npages, mr);
         Dims rd(nrows, ncols, npages);
         for (size_t p = 0; p < npages; ++p)
             for (size_t c = 0; c < ncols; ++c)
@@ -1831,7 +1816,7 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
     if (t == ValueType::OBJECT) {
         auto &d = dims();
         Dims rd(nrows, ncols, npages);
-        std::vector<size_t> src(nrows * ncols * npages);
+        keel::SmallArray<size_t, 32> src(nrows * ncols * npages, mr ? mr : keel::default_allocator());
         for (size_t p = 0; p < npages; ++p)
             for (size_t c = 0; c < ncols; ++c)
                 for (size_t r = 0; r < nrows; ++r)
@@ -1844,7 +1829,7 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
     size_t es = elementSize(t);
     if (es == 0)
         throw std::runtime_error(
-            std::string("indexGet3D not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("indexGet3D not supported for type '{}'", mtypeName(t)).c_str());
 
     auto &d = dims();
     auto result = squeezePage ? Value::matrix(nrows, ncols, t, mr)
@@ -1862,7 +1847,7 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
             const size_t pageBytes = nrows * ncols * es;
             for (size_t p = 0; p < npages; ++p) {
                 const size_t sp = subIdx(pageIdx, p);
-                std::memcpy(dst + p * pageBytes, src + d.sub2ind(0, 0, sp) * es, pageBytes);
+                keel::mem_copy(dst + p * pageBytes, src + d.sub2ind(0, 0, sp) * es, pageBytes);
             }
         } else {
             const size_t colBytes = nrows * es;
@@ -1870,12 +1855,12 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
                 const size_t sp = subIdx(pageIdx, p);
                 for (size_t c = 0; c < ncols; ++c) {
                     const size_t sc = subIdx(colIdx, c);
-                    std::memcpy(dst + (p * ncols + c) * colBytes,
-                                src + d.sub2ind(0, sc, sp) * es, colBytes);
+                    keel::mem_copy(dst + (p * ncols + c) * colBytes,
+                                   src + d.sub2ind(0, sc, sp) * es, colBytes);
                 }
             }
         }
-        return narrowComplex(std::move(result), mr);
+        return narrowComplex(keel::move(result), mr);
     }
 
     Dims rd(nrows, ncols, npages);
@@ -1884,11 +1869,11 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
         for (size_t c = 0; c < ncols; ++c) {
             const size_t sc = subIdx(colIdx, c);
             for (size_t r = 0; r < nrows; ++r)
-                std::memcpy(dst + rd.sub2ind(r, c, p) * es,
-                            src + d.sub2ind(subIdx(rowIdx, r), sc, sp) * es, es);
+                keel::mem_copy(dst + rd.sub2ind(r, c, p) * es,
+                               src + d.sub2ind(subIdx(rowIdx, r), sc, sp) * es, es);
         }
     }
-    return narrowComplex(std::move(result), mr);   // all-real complex slice -> real
+    return narrowComplex(keel::move(result), mr);   // all-real complex slice -> real
 }
 
 // ND slice: extract sub-tensor at given per-dim indices.
@@ -1913,7 +1898,7 @@ Value Value::indexGetND(const size_t *const *perDimIdx,
     size_t es = (isCell || isObj) ? 0 : elementSize(t);
     if (!isCell && !isObj && es == 0)
         throw std::runtime_error(
-            std::string("indexGetND not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("indexGetND not supported for type '{}'", mtypeName(t)).c_str());
 
     // Build output shape from perDimCount; trailing zero-extent dims
     // produce an empty tensor. MATLAB convention: trailing singleton
@@ -1926,7 +1911,7 @@ Value Value::indexGetND(const size_t *const *perDimIdx,
     while (outNd > 2 && perDimCount[outNd - 1] == 1) --outNd;
     Value result;
     if (!isObj) {
-        result = isCell ? Value::cellND(perDimCount, outNd)
+        result = isCell ? Value::cellND(perDimCount, outNd, mr)
                         : Value::matrixND(perDimCount, outNd, t, mr);
         result.setSingleComplex(isSingleComplex());
     }
@@ -1950,9 +1935,9 @@ Value Value::indexGetND(const size_t *const *perDimIdx,
         for (size_t k = 0; k < perDimCount[i]; ++k)
             if (perDimIdx[i][k] >= lim)
                 throw std::runtime_error(
-                    "Index exceeds array dimensions (dim " + std::to_string(i + 1)
-                    + ": " + std::to_string(perDimIdx[i][k] + 1) + " > "
-                    + std::to_string(lim) + ")");
+                    keel::format_small<128>(
+                        "Index exceeds array dimensions (dim {}: {} > {})",
+                        i + 1, perDimIdx[i][k] + 1, lim).c_str());
     }
 
     Dims outIter(perDimCount, nd);
@@ -1961,10 +1946,10 @@ Value Value::indexGetND(const size_t *const *perDimIdx,
     if (isObj) {
         // Object N-D slice: collect source linear offsets, then gather with
         // the per-element value/handle rule into the output-shaped array.
-        std::vector<size_t> src(totalOut);
+        keel::SmallArray<size_t, 32> src(totalOut, mr ? mr : keel::default_allocator());
         do {
             size_t srcOff = 0;
-            const int loopN = std::min(nd, srcNd);
+            const int loopN = keel::min(nd, srcNd);
             for (int i = 0; i < loopN; ++i)
                 srcOff += perDimIdx[i][coords[i]] * srcStrides[i];
             src[outIdx++] = srcOff;
@@ -1974,7 +1959,7 @@ Value Value::indexGetND(const size_t *const *perDimIdx,
     if (isCell) {
         do {
             size_t srcOff = 0;
-            const int loopN = std::min(nd, srcNd);
+            const int loopN = keel::min(nd, srcNd);
             for (int i = 0; i < loopN; ++i) {
                 const size_t pickedIdx = perDimIdx[i][coords[i]];
                 srcOff += pickedIdx * srcStrides[i];
@@ -1987,18 +1972,18 @@ Value Value::indexGetND(const size_t *const *perDimIdx,
         char *dst = static_cast<char *>(result.rawDataMut());
         do {
             size_t srcOff = 0;
-            const int loopN = std::min(nd, srcNd);
+            const int loopN = keel::min(nd, srcNd);
             for (int i = 0; i < loopN; ++i) {
                 const size_t pickedIdx = perDimIdx[i][coords[i]];
                 srcOff += pickedIdx * srcStrides[i];
             }
             // Dims i ≥ srcNd contribute 0 (already verified by bounds check).
-            std::memcpy(dst + outIdx * es, src + srcOff * es, es);
+            keel::mem_copy(dst + outIdx * es, src + srcOff * es, es);
             ++outIdx;
         } while (incrementCoords(coords, outIter));
     }
 
-    return narrowComplex(std::move(result), mr);   // all-real complex slice -> real
+    return narrowComplex(keel::move(result), mr);   // all-real complex slice -> real
 }
 
 // Logical indexing: extract elements where mask is true → row vector of same type.
@@ -2008,7 +1993,7 @@ Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, keel::Allocator *
     for (size_t i = numel(); i < maskLen; ++i)
         if (mask[i])
             throw std::runtime_error("Index exceeds the number of array elements");
-    size_t n = std::min(maskLen, numel());
+    size_t n = keel::min(maskLen, numel());
     // Count selected elements
     size_t selected = 0;
     for (size_t i = 0; i < n; ++i)
@@ -2064,7 +2049,7 @@ Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, keel::Allocator *
         return result;
     }
     case ValueType::CELL: {
-        auto result = Value::cell(rr, cc);
+        auto result = Value::cell(rr, cc, mr);
         size_t k = 0;
         for (size_t i = 0; i < n; ++i)
             if (mask[i])
@@ -2083,25 +2068,23 @@ Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, keel::Allocator *
         auto result = Value::structArray(rr, cc, mr);
         if (result.heap_->fieldOrder) {
             if (heap_->fieldOrder && !heap_->fieldOrder->empty()) {
-                *result.heap_->fieldOrder = *heap_->fieldOrder;
+                *result.heap_->fieldOrder = heap_->fieldOrder->clone(result.heap_->alloc);
             } else {
                 auto fnms = fieldNamesInOrder();
-                result.heap_->fieldOrder->assign(fnms.begin(), fnms.end());
+                *result.heap_->fieldOrder = fnms.clone(result.heap_->alloc);
             }
         }
         size_t k = 0;
         for (size_t i = 0; i < n; ++i) {
             if (mask[i]) {
                 const auto &src = (*heap_->structArray)[i];
-                auto &dst = (*result.heap_->structArray)[k++];
-                for (const auto &[key, val] : src)
-                    dst.emplace(key, val);
+                (*result.heap_->structArray)[k++] = src.clone(result.heap_->alloc);
             }
         }
         return result;
     }
     case ValueType::OBJECT: {
-        std::vector<size_t> sel;
+        keel::SmallArray<size_t, 32> sel(mr ? mr : keel::default_allocator());
         sel.reserve(rr * cc);
         for (size_t i = 0; i < n; ++i)
             if (mask[i])
@@ -2119,17 +2102,17 @@ Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, keel::Allocator *
         size_t k = 0;
         for (size_t i = 0; i < n; ++i)
             if (mask[i])
-                std::memcpy(dst + k++ * es, src + i * es, es);
+                keel::mem_copy(dst + k++ * es, src + i * es, es);
         return result;
     }
     default:
         throw std::runtime_error(
-            std::string("logicalIndex not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("logicalIndex not supported for type '{}'", mtypeName(t)).c_str());
     }
 }
 
 // ============================================================
-// Index resolution — convert Value index to vector<size_t> (0-based)
+// Index resolution — convert Value index to keel::Array<keel::usize> (0-based)
 // ============================================================
 
 keel::usize Value::checkedScalarIndex(double v)
@@ -2141,9 +2124,9 @@ keel::usize Value::checkedScalarIndex(double v)
     return out0;
 }
 
-std::vector<size_t> Value::resolveIndices(const Value &idx, size_t dimSize)
+keel::Array<keel::usize> Value::resolveIndices(const Value &idx, size_t dimSize)
 {
-    std::vector<size_t> out;
+    keel::Array<keel::usize> out;
     if (idx.isChar() && idx.numel() == 1 && idx.charData()[0] == ':') {
         out.resize(dimSize);
         for (size_t i = 0; i < dimSize; ++i)
@@ -2153,7 +2136,7 @@ std::vector<size_t> Value::resolveIndices(const Value &idx, size_t dimSize)
         for (size_t i = dimSize; i < idx.numel(); ++i)
             if (m[i])
                 throw std::runtime_error("Index exceeds the number of array elements");
-        size_t n = std::min(idx.numel(), dimSize);
+        size_t n = keel::min(idx.numel(), dimSize);
         for (size_t i = 0; i < n; ++i)
             if (m[i])
                 out.push_back(i);
@@ -2167,6 +2150,7 @@ std::vector<size_t> Value::resolveIndices(const Value &idx, size_t dimSize)
         // char vector (code points) — MATLAB accepts them all. elemAsDouble
         // reads each generically (doubleData() throws "Not a double array" for
         // non-DOUBLE index arrays, e.g. A(int32([1 3]))).
+        out.reserve(idx.numel());
         for (size_t i = 0; i < idx.numel(); ++i) {
             keel::usize ii = Value::checkedScalarIndex(idx.elemAsDouble(i));
             if (ii >= dimSize)
@@ -2177,9 +2161,9 @@ std::vector<size_t> Value::resolveIndices(const Value &idx, size_t dimSize)
     return out;
 }
 
-std::vector<size_t> Value::resolveIndicesUnchecked(const Value &idx)
+keel::Array<keel::usize> Value::resolveIndicesUnchecked(const Value &idx)
 {
-    std::vector<size_t> out;
+    keel::Array<keel::usize> out;
     if (idx.isChar() && idx.numel() == 1 && idx.charData()[0] == ':') {
         // Colon in unchecked context — caller must handle this separately
         return out;
@@ -2194,6 +2178,7 @@ std::vector<size_t> Value::resolveIndicesUnchecked(const Value &idx)
     } else {
         // See resolveIndices: integer/single/char index arrays read via the
         // generic elemAsDouble, not the DOUBLE-only doubleData().
+        out.reserve(idx.numel());
         for (size_t i = 0; i < idx.numel(); ++i)
             out.push_back(Value::checkedScalarIndex(idx.elemAsDouble(i)));
     }
@@ -2250,8 +2235,8 @@ static void writeElem(Value &dst, size_t idx, const Value &val, size_t valIdx)
     case ValueType::SINGLE: dst.singleDataMut()[idx] = static_cast<float   >(val.elemAsDouble(valIdx)); break;
     default:
         throw std::runtime_error(
-            std::string("Indexed assignment not supported for type '")
-            + mtypeName(t) + "'");
+            keel::format_small<96>("Indexed assignment not supported for type '{}'",
+                                   mtypeName(t)).c_str());
     }
 }
 
@@ -2295,8 +2280,8 @@ static void writeScalar(Value &dst, size_t idx, const Value &val)
     case ValueType::SINGLE: dst.singleDataMut()[idx] = static_cast<float   >(val.toScalar()); break;
     default:
         throw std::runtime_error(
-            std::string("Indexed assignment not supported for type '")
-            + mtypeName(t) + "'");
+            keel::format_small<96>("Indexed assignment not supported for type '{}'",
+                                   mtypeName(t)).c_str());
     }
 }
 
@@ -2340,7 +2325,8 @@ void Value::indexSet2D(const size_t *rowIdx, size_t nrows,
             for (size_t c = 0; c < ncols; ++c) {
                 double *dc = dst + subIdx(colIdx, c) * dstRows;
                 if (rowIdx == nullptr) {
-                    std::fill_n(dc, nrows, sv);
+                    for (size_t r = 0; r < nrows; ++r)
+                        dc[r] = sv;
                 } else {
                     for (size_t r = 0; r < nrows; ++r)
                         dc[rowIdx[r]] = sv;
@@ -2355,7 +2341,8 @@ void Value::indexSet2D(const size_t *rowIdx, size_t nrows,
             for (size_t c = 0; c < ncols; ++c) {
                 keel::c64 *dc = dst + subIdx(colIdx, c) * dstRows;
                 if (rowIdx == nullptr) {
-                    std::fill_n(dc, nrows, sv);
+                    for (size_t r = 0; r < nrows; ++r)
+                        dc[r] = sv;
                 } else {
                     for (size_t r = 0; r < nrows; ++r)
                         dc[rowIdx[r]] = sv;
@@ -2378,14 +2365,14 @@ void Value::indexSet2D(const size_t *rowIdx, size_t nrows,
             const double *src = val.doubleData();
             const size_t dstRows = d.rows();
             if (rowIdx == nullptr && nrows == dstRows && colIdx == nullptr && ncols == d.cols()) {
-                std::memcpy(dst, src, total * sizeof(double));
+                keel::mem_copy(dst, src, total * sizeof(double));
                 return;
             }
             if (rowIdx == nullptr) {
                 for (size_t c = 0; c < ncols; ++c)
-                    std::memcpy(dst + subIdx(colIdx, c) * dstRows,
-                                src + c * nrows,
-                                nrows * sizeof(double));
+                    keel::mem_copy(dst + subIdx(colIdx, c) * dstRows,
+                                   src + c * nrows,
+                                   nrows * sizeof(double));
                 return;
             }
             size_t k = 0;
@@ -2401,14 +2388,14 @@ void Value::indexSet2D(const size_t *rowIdx, size_t nrows,
             const keel::c64 *src = val.complexData();
             const size_t dstRows = d.rows();
             if (rowIdx == nullptr && nrows == dstRows && colIdx == nullptr && ncols == d.cols()) {
-                std::memcpy(dst, src, total * sizeof(keel::c64));
+                keel::mem_copy(dst, src, total * sizeof(keel::c64));
                 return;
             }
             if (rowIdx == nullptr) {
                 for (size_t c = 0; c < ncols; ++c)
-                    std::memcpy(dst + subIdx(colIdx, c) * dstRows,
-                                src + c * nrows,
-                                nrows * sizeof(keel::c64));
+                    keel::mem_copy(dst + subIdx(colIdx, c) * dstRows,
+                                   src + c * nrows,
+                                   nrows * sizeof(keel::c64));
                 return;
             }
             size_t k = 0;
@@ -2443,7 +2430,8 @@ void Value::indexSet3D(const size_t *rowIdx, size_t nrows,
                 for (size_t c = 0; c < ncols; ++c) {
                     double *dc = dst + d.sub2ind(0, subIdx(colIdx, c), sp);
                     if (rowIdx == nullptr) {
-                        std::fill_n(dc, nrows, sv);
+                        for (size_t r = 0; r < nrows; ++r)
+                            dc[r] = sv;
                     } else {
                         for (size_t r = 0; r < nrows; ++r)
                             dc[rowIdx[r]] = sv;
@@ -2469,18 +2457,18 @@ void Value::indexSet3D(const size_t *rowIdx, size_t nrows,
             if (rowIdx == nullptr && nrows == d.rows() && colIdx == nullptr && ncols == d.cols()) {
                 const size_t pageElems = nrows * ncols;
                 for (size_t p = 0; p < npages; ++p)
-                    std::memcpy(dst + d.sub2ind(0, 0, subIdx(pageIdx, p)),
-                                src + p * pageElems,
-                                pageElems * sizeof(double));
+                    keel::mem_copy(dst + d.sub2ind(0, 0, subIdx(pageIdx, p)),
+                                   src + p * pageElems,
+                                   pageElems * sizeof(double));
                 return;
             }
             if (rowIdx == nullptr) {
                 for (size_t p = 0; p < npages; ++p) {
                     const size_t sp = subIdx(pageIdx, p);
                     for (size_t c = 0; c < ncols; ++c)
-                        std::memcpy(dst + d.sub2ind(0, subIdx(colIdx, c), sp),
-                                    src + (p * ncols + c) * nrows,
-                                    nrows * sizeof(double));
+                        keel::mem_copy(dst + d.sub2ind(0, subIdx(colIdx, c), sp),
+                                       src + (p * ncols + c) * nrows,
+                                       nrows * sizeof(double));
                 }
                 return;
             }
@@ -2501,18 +2489,18 @@ void Value::indexSet3D(const size_t *rowIdx, size_t nrows,
             if (rowIdx == nullptr && nrows == d.rows() && colIdx == nullptr && ncols == d.cols()) {
                 const size_t pageElems = nrows * ncols;
                 for (size_t p = 0; p < npages; ++p)
-                    std::memcpy(dst + d.sub2ind(0, 0, subIdx(pageIdx, p)),
-                                src + p * pageElems,
-                                pageElems * sizeof(keel::c64));
+                    keel::mem_copy(dst + d.sub2ind(0, 0, subIdx(pageIdx, p)),
+                                   src + p * pageElems,
+                                   pageElems * sizeof(keel::c64));
                 return;
             }
             if (rowIdx == nullptr) {
                 for (size_t p = 0; p < npages; ++p) {
                     const size_t sp = subIdx(pageIdx, p);
                     for (size_t c = 0; c < ncols; ++c)
-                        std::memcpy(dst + d.sub2ind(0, subIdx(colIdx, c), sp),
-                                    src + (p * ncols + c) * nrows,
-                                    nrows * sizeof(keel::c64));
+                        keel::mem_copy(dst + d.sub2ind(0, subIdx(colIdx, c), sp),
+                                       src + (p * ncols + c) * nrows,
+                                       nrows * sizeof(keel::c64));
                 }
                 return;
             }
@@ -2569,7 +2557,7 @@ void Value::indexSetND(const size_t *const *perDimIdx,
     // MATLAB: `A(i,j,k,l) = v` creates / extends as needed.
     {
         const int curNd = dims().ndim();
-        const int newNd = std::max(nd, curNd);
+        const int newNd = keel::max(nd, curNd);
         if (newNd > kMaxNd)
             throw std::runtime_error("indexSetND: target rank exceeds 32");
         size_t need[kMaxNd];
@@ -2603,7 +2591,7 @@ void Value::indexSetND(const size_t *const *perDimIdx,
     if (val.isScalar()) {
         do {
             size_t off = 0;
-            const int loopN = std::min(nd, dstNd);
+            const int loopN = keel::min(nd, dstNd);
             for (int i = 0; i < loopN; ++i)
                 off += perDimIdx[i][coords[i]] * dstStrides[i];
             writeScalar(*this, off, val);
@@ -2615,7 +2603,7 @@ void Value::indexSetND(const size_t *const *perDimIdx,
         size_t k = 0;
         do {
             size_t off = 0;
-            const int loopN = std::min(nd, dstNd);
+            const int loopN = keel::min(nd, dstNd);
             for (int i = 0; i < loopN; ++i)
                 off += perDimIdx[i][coords[i]] * dstStrides[i];
             writeElem(*this, off, val, k++);
@@ -2630,39 +2618,43 @@ void Value::indexSetND(const size_t *const *perDimIdx,
 void Value::indexDelete(const size_t *indices, size_t count, keel::Allocator *mr)
 {
     ValueType t = type();
-    // STRING elements are std::string, not fixed-width bytes, so the
+    // STRING elements are variable-length strings, not fixed-width bytes, so the
     // memcpy-based path below would silently produce zero-sized output
     // (elementSize(STRING) == 0). Reject up-front alongside the other
     // structurally-incompatible types.
     if (t == ValueType::STRUCT || t == ValueType::FUNC_HANDLE || t == ValueType::EMPTY
         || t == ValueType::STRING)
         throw std::runtime_error(
-            std::string("Delete indexing not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("Delete indexing not supported for type '{}'", mtypeName(t)).c_str());
 
     size_t n = numel();
-    std::vector<bool> del(n, false);
+    keel::Allocator *tmpAlloc = mr ? mr : keel::default_allocator();
+    keel::SmallArray<keel::u8, 64> del(n, keel::u8{0}, tmpAlloc);
     for (size_t k = 0; k < count; ++k)
         if (indices[k] < n)
-            del[indices[k]] = true;
+            del[indices[k]] = 1;
 
-    size_t remaining = std::count(del.begin(), del.end(), false);
+    size_t remaining = 0;
+    for (size_t i = 0; i < n; ++i)
+        if (!del[i])
+            ++remaining;
     // MATLAB: 1D delete always produces row vector, except column vectors stay column
     bool isRow = !(dims().cols() == 1 && dims().rows() > 1);
 
     if (t == ValueType::CELL) {
         auto &src = cellDataVec();
-        auto result = isRow ? Value::cell(1, remaining) : Value::cell(remaining, 1);
+        auto result = isRow ? Value::cell(1, remaining, mr) : Value::cell(remaining, 1, mr);
         auto &dst = result.cellDataVec();
         size_t j = 0;
         for (size_t i = 0; i < n; ++i)
             if (!del[i])
                 dst[j++] = src[i];
-        *this = std::move(result);
+        *this = keel::move(result);
         return;
     }
 
     if (t == ValueType::OBJECT) {
-        std::vector<size_t> kept;
+        keel::SmallArray<size_t, 64> kept(tmpAlloc);
         kept.reserve(remaining);
         for (size_t i = 0; i < n; ++i)
             if (!del[i])
@@ -2683,9 +2675,9 @@ void Value::indexDelete(const size_t *indices, size_t count, keel::Allocator *mr
         size_t j = 0;
         for (size_t i = 0; i < n; ++i)
             if (!del[i])
-                std::memcpy(dst + j++ * es, src + i * es, es);
+                keel::mem_copy(dst + j++ * es, src + i * es, es);
     }
-    *this = std::move(result);
+    *this = keel::move(result);
 }
 
 void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
@@ -2693,29 +2685,29 @@ void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
                            keel::Allocator *mr)
 {
     ValueType t = type();
-    // STRING elements are std::string, not fixed-width bytes, so the
-    // memcpy-based path below would silently produce zero-sized output
-    // (elementSize(STRING) == 0). Reject up-front alongside the other
-    // structurally-incompatible types.
     if (t == ValueType::STRUCT || t == ValueType::FUNC_HANDLE || t == ValueType::EMPTY
         || t == ValueType::STRING)
         throw std::runtime_error(
-            std::string("Delete indexing not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("Delete indexing not supported for type '{}'", mtypeName(t)).c_str());
 
     size_t R = dims().rows(), C = dims().cols();
     const bool sc = isSingleComplex();
+    keel::Allocator *tmpAlloc = mr ? mr : keel::default_allocator();
 
     if (ncols == C) {
         // Delete rows
-        std::vector<bool> delR(R, false);
+        keel::SmallArray<keel::u8, 64> delR(R, keel::u8{0}, tmpAlloc);
         for (size_t k = 0; k < nrows; ++k)
             if (rowIdx[k] < R)
-                delR[rowIdx[k]] = true;
-        size_t newR = std::count(delR.begin(), delR.end(), false);
+                delR[rowIdx[k]] = 1;
+        size_t newR = 0;
+        for (size_t r = 0; r < R; ++r)
+            if (!delR[r])
+                ++newR;
 
         if (t == ValueType::CELL) {
             auto &src = cellDataVec();
-            auto result = Value::cell(newR, C);
+            auto result = Value::cell(newR, C, mr);
             auto &dst = result.cellDataVec();
             size_t ri = 0;
             for (size_t r = 0; r < R; ++r)
@@ -2724,9 +2716,9 @@ void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
                         dst[c * newR + ri] = src[c * R + r];
                     ri++;
                 }
-            *this = std::move(result);
+            *this = keel::move(result);
         } else if (t == ValueType::OBJECT) {
-            std::vector<size_t> kept;
+            keel::SmallArray<size_t, 64> kept(tmpAlloc);
             kept.reserve(newR * C);
             for (size_t c = 0; c < C; ++c)
                 for (size_t r = 0; r < R; ++r)
@@ -2744,24 +2736,27 @@ void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
                 for (size_t r = 0; r < R; ++r)
                     if (!delR[r]) {
                         for (size_t c = 0; c < C; ++c)
-                            std::memcpy(dst + (c * newR + ri) * es,
-                                        src + (c * R + r) * es, es);
+                            keel::mem_copy(dst + (c * newR + ri) * es,
+                                           src + (c * R + r) * es, es);
                         ri++;
                     }
             }
-            *this = std::move(result);
+            *this = keel::move(result);
         }
     } else if (nrows == R) {
         // Delete columns
-        std::vector<bool> delC(C, false);
+        keel::SmallArray<keel::u8, 64> delC(C, keel::u8{0}, tmpAlloc);
         for (size_t k = 0; k < ncols; ++k)
             if (colIdx[k] < C)
-                delC[colIdx[k]] = true;
-        size_t newC = std::count(delC.begin(), delC.end(), false);
+                delC[colIdx[k]] = 1;
+        size_t newC = 0;
+        for (size_t c = 0; c < C; ++c)
+            if (!delC[c])
+                ++newC;
 
         if (t == ValueType::CELL) {
             auto &src = cellDataVec();
-            auto result = Value::cell(R, newC);
+            auto result = Value::cell(R, newC, mr);
             auto &dst = result.cellDataVec();
             size_t ci = 0;
             for (size_t c = 0; c < C; ++c)
@@ -2770,9 +2765,9 @@ void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
                         dst[ci * R + r] = src[c * R + r];
                     ci++;
                 }
-            *this = std::move(result);
+            *this = keel::move(result);
         } else if (t == ValueType::OBJECT) {
-            std::vector<size_t> kept;
+            keel::SmallArray<size_t, 64> kept(tmpAlloc);
             kept.reserve(R * newC);
             for (size_t c = 0; c < C; ++c)
                 if (!delC[c])
@@ -2789,11 +2784,11 @@ void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
                 size_t ci = 0;
                 for (size_t c = 0; c < C; ++c)
                     if (!delC[c]) {
-                        std::memcpy(dst + ci * R * es, src + c * R * es, R * es);
+                        keel::mem_copy(dst + ci * R * es, src + c * R * es, R * es);
                         ci++;
                     }
             }
-            *this = std::move(result);
+            *this = keel::move(result);
         }
     } else {
         throw std::runtime_error(
@@ -2807,17 +2802,14 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
                            keel::Allocator *mr)
 {
     ValueType t = type();
-    // STRING elements are std::string, not fixed-width bytes, so the
-    // memcpy-based path below would silently produce zero-sized output
-    // (elementSize(STRING) == 0). Reject up-front alongside the other
-    // structurally-incompatible types.
     if (t == ValueType::STRUCT || t == ValueType::FUNC_HANDLE || t == ValueType::EMPTY
         || t == ValueType::STRING)
         throw std::runtime_error(
-            std::string("Delete indexing not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("Delete indexing not supported for type '{}'", mtypeName(t)).c_str());
 
     size_t R = dims().rows(), C = dims().cols(), P = dims().pages();
     const bool sc = isSingleComplex();
+    keel::Allocator *tmpAlloc = mr ? mr : keel::default_allocator();
 
     // Exactly one dimension must be a proper subset; the other two must be fully selected
     bool fullR = (nrows == R), fullC = (ncols == C), fullP = (npages == P);
@@ -2828,13 +2820,16 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
 
     if (!fullP) {
         // Delete pages
-        std::vector<bool> delP(P, false);
+        keel::SmallArray<keel::u8, 64> delP(P, keel::u8{0}, tmpAlloc);
         for (size_t k = 0; k < npages; ++k)
-            if (pageIdx[k] < P) delP[pageIdx[k]] = true;
-        size_t newP = std::count(delP.begin(), delP.end(), false);
+            if (pageIdx[k] < P) delP[pageIdx[k]] = 1;
+        size_t newP = 0;
+        for (size_t p = 0; p < P; ++p)
+            if (!delP[p])
+                ++newP;
 
         if (t == ValueType::CELL) {
-            auto result = Value::cell3D(R, C, newP);
+            auto result = Value::cell3D(R, C, newP, mr);
             Dims rd(R, C, newP);
             size_t pi = 0;
             for (size_t p = 0; p < P; ++p)
@@ -2845,7 +2840,7 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
                                 cellAt(dims().sub2ind(r, c, p));
                     pi++;
                 }
-            *this = std::move(result);
+            *this = keel::move(result);
         } else {
             size_t es = elementSize(t);
             auto result = Value::matrix3d(R, C, newP, t, mr);
@@ -2856,18 +2851,21 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
             size_t pi = 0;
             for (size_t p = 0; p < P; ++p)
                 if (!delP[p])
-                    std::memcpy(dst + pi++ * sliceBytes, src + p * sliceBytes, sliceBytes);
-            *this = std::move(result);
+                    keel::mem_copy(dst + pi++ * sliceBytes, src + p * sliceBytes, sliceBytes);
+            *this = keel::move(result);
         }
     } else if (!fullR) {
         // Delete rows (across all pages)
-        std::vector<bool> delR(R, false);
+        keel::SmallArray<keel::u8, 64> delR(R, keel::u8{0}, tmpAlloc);
         for (size_t k = 0; k < nrows; ++k)
-            if (rowIdx[k] < R) delR[rowIdx[k]] = true;
-        size_t newR = std::count(delR.begin(), delR.end(), false);
+            if (rowIdx[k] < R) delR[rowIdx[k]] = 1;
+        size_t newR = 0;
+        for (size_t r = 0; r < R; ++r)
+            if (!delR[r])
+                ++newR;
 
         if (t == ValueType::CELL) {
-            auto result = Value::cell3D(newR, C, P);
+            auto result = Value::cell3D(newR, C, P, mr);
             Dims rd(newR, C, P);
             for (size_t p = 0; p < P; ++p) {
                 size_t ri = 0;
@@ -2879,7 +2877,7 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
                         ri++;
                     }
             }
-            *this = std::move(result);
+            *this = keel::move(result);
         } else {
             size_t es = elementSize(t);
             auto result = Value::matrix3d(newR, C, P, t, mr);
@@ -2891,23 +2889,26 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
                 for (size_t r = 0; r < R; ++r)
                     if (!delR[r]) {
                         for (size_t c = 0; c < C; ++c)
-                            std::memcpy(
+                            keel::mem_copy(
                                 dst + (p * newR * C + c * newR + ri) * es,
                                 src + (p * R * C + c * R + r) * es, es);
                         ri++;
                     }
             }
-            *this = std::move(result);
+            *this = keel::move(result);
         }
     } else {
         // Delete columns (across all pages)
-        std::vector<bool> delC(C, false);
+        keel::SmallArray<keel::u8, 64> delC(C, keel::u8{0}, tmpAlloc);
         for (size_t k = 0; k < ncols; ++k)
-            if (colIdx[k] < C) delC[colIdx[k]] = true;
-        size_t newC = std::count(delC.begin(), delC.end(), false);
+            if (colIdx[k] < C) delC[colIdx[k]] = 1;
+        size_t newC = 0;
+        for (size_t c = 0; c < C; ++c)
+            if (!delC[c])
+                ++newC;
 
         if (t == ValueType::CELL) {
-            auto result = Value::cell3D(R, newC, P);
+            auto result = Value::cell3D(R, newC, P, mr);
             Dims rd(R, newC, P);
             for (size_t p = 0; p < P; ++p) {
                 size_t ci = 0;
@@ -2919,7 +2920,7 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
                         ci++;
                     }
             }
-            *this = std::move(result);
+            *this = keel::move(result);
         } else {
             size_t es = elementSize(t);
             auto result = Value::matrix3d(R, newC, P, t, mr);
@@ -2930,13 +2931,13 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
                 size_t ci = 0;
                 for (size_t c = 0; c < C; ++c)
                     if (!delC[c]) {
-                        std::memcpy(
+                        keel::mem_copy(
                             dst + (p * R * newC + ci * R) * es,
                             src + (p * R * C + c * R) * es, R * es);
                         ci++;
                     }
             }
-            *this = std::move(result);
+            *this = keel::move(result);
         }
     }
 }
@@ -2964,7 +2965,7 @@ void Value::indexDeleteND(const size_t *const *perDimIdx,
     if (t == ValueType::STRUCT || t == ValueType::FUNC_HANDLE || t == ValueType::EMPTY
         || t == ValueType::STRING)
         throw std::runtime_error(
-            std::string("Delete indexing not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("Delete indexing not supported for type '{}'", mtypeName(t)).c_str());
 
     auto &d = dims();
     constexpr int kMaxNd = Dims::kMaxRank;
@@ -2990,12 +2991,16 @@ void Value::indexDeleteND(const size_t *const *perDimIdx,
         throw std::runtime_error(
             "ND delete: partial axis exceeds source rank");
 
+    keel::Allocator *tmpAlloc = mr ? mr : keel::default_allocator();
     const size_t axisLen = d.dim(partial);
-    std::vector<bool> delMask(axisLen, false);
+    keel::SmallArray<keel::u8, 64> delMask(axisLen, keel::u8{0}, tmpAlloc);
     for (size_t k = 0; k < perDimCount[partial]; ++k)
         if (perDimIdx[partial][k] < axisLen)
-            delMask[perDimIdx[partial][k]] = true;
-    const size_t newLen = std::count(delMask.begin(), delMask.end(), false);
+            delMask[perDimIdx[partial][k]] = 1;
+    size_t newLen = 0;
+    for (size_t i = 0; i < axisLen; ++i)
+        if (!delMask[i])
+            ++newLen;
 
     size_t newShape[kMaxNd];
     for (int i = 0; i < srcNd; ++i)
@@ -3005,14 +3010,14 @@ void Value::indexDeleteND(const size_t *const *perDimIdx,
     const size_t es = isCell ? 0 : elementSize(t);
     if (!isCell && es == 0)
         throw std::runtime_error(
-            std::string("indexDeleteND not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("indexDeleteND not supported for type '{}'", mtypeName(t)).c_str());
 
     const bool sc = isSingleComplex();
-    Value result = isCell ? Value::cellND(newShape, srcNd)
+    Value result = isCell ? Value::cellND(newShape, srcNd, mr)
                            : Value::matrixND(newShape, srcNd, t, mr);
     result.setSingleComplex(sc);
     if (newLen == 0) {
-        *this = std::move(result);
+        *this = keel::move(result);
         return;
     }
 
@@ -3022,7 +3027,7 @@ void Value::indexDeleteND(const size_t *const *perDimIdx,
     computeStridesColMajor(newDims, dstStrides);
 
     // Per-axis-value compressed-output index.
-    std::vector<size_t> remap(axisLen, 0);
+    keel::SmallArray<size_t, 64> remap(axisLen, size_t{0}, tmpAlloc);
     {
         size_t j = 0;
         for (size_t i = 0; i < axisLen; ++i)
@@ -3045,22 +3050,21 @@ void Value::indexDeleteND(const size_t *const *perDimIdx,
         if (isCell)
             result.cellAt(dstOff) = cellAt(srcOff);
         else
-            std::memcpy(dstRaw + dstOff * es, srcRaw + srcOff * es, es);
+            keel::mem_copy(dstRaw + dstOff * es, srcRaw + srcOff * es, es);
     } while (incrementCoords(coords, d));
 
-    *this = std::move(result);
+    *this = keel::move(result);
 }
 
 Value Value::complexScalar(keel::c64 v, keel::Allocator *mr)
 {
     Value m;
-    auto *h = new HeapObject();
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::COMPLEX;
     h->dims = {1, 1};
-    h->alloc = mr;
-    h->buffer = new DataBuffer(sizeof(keel::c64), mr);
+    h->buffer = DataBuffer::create(sizeof(keel::c64), h->alloc);
     *static_cast<keel::c64 *>(h->buffer->data()) = v;
-    m.heap_ = h;
+    m.heap_ = h.release();
     return m;
 }
 Value Value::complexScalar(double re, double im, keel::Allocator *mr)
@@ -3170,10 +3174,10 @@ bool Value::isObject() const
 {
     return type() == ValueType::OBJECT;
 }
-std::string Value::objectClassName() const
+keel::String Value::objectClassName() const
 {
     if (isObject() && heap_->objClass)
-        return *heap_->objClass;
+        return heap_->objClass->clone();
     return {};
 }
 bool Value::objectIsHandle() const
@@ -3218,10 +3222,9 @@ Value Value::objectGather(const size_t *srcLinear, const Dims &resultDims,
         mr = heap_->alloc ? heap_->alloc : keel::default_allocator();
     const bool handle = heap_->objIsHandle;
     const size_t n = resultDims.numel();
-    auto *h = new HeapObject();
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::OBJECT;
-    h->alloc = mr;
-    h->objClass = new std::string(*heap_->objClass);
+    h->objClass = h->allocNew<keel::String>(heap_->objClass ? heap_->objClass->as_ref() : keel::StringRef{}, h->alloc);
     h->objIsHandle = handle;
     h->dims = resultDims;
     h->objStates.reserve(n);
@@ -3234,11 +3237,11 @@ Value Value::objectGather(const size_t *srcLinear, const Dims &resultDims,
         h->objStates.push_back((handle || !src) ? src : src->deepCopy(mr));
     }
     Value out;
-    out.heap_ = h;
+    out.heap_ = h.release();
     return out;
 }
 
-Value Value::objectSubArray(const std::vector<size_t> &idxs,
+Value Value::objectSubArray(keel::ArrayRef<keel::usize> idxs,
                             keel::Allocator *mr) const
 {
     if (!isObject())
@@ -3255,7 +3258,7 @@ Value Value::objectReshape(const Dims &newDims, keel::Allocator *mr) const
         return Value();
     // Identity gather (column-major order preserved) into the new shape.
     const size_t n = heap_->objStates.size();
-    std::vector<size_t> idx(n);
+    keel::SmallArray<size_t, 32> idx(n, mr ? mr : keel::default_allocator());
     for (size_t i = 0; i < n; ++i)
         idx[i] = i;
     return objectGather(idx.data(), newDims, mr);
@@ -3266,7 +3269,7 @@ Value Value::objectConcatN(const Value *parts, size_t count, const Dims &outDims
 {
     if (!mr)
         mr = keel::default_allocator();
-    std::string clsName;
+    keel::String clsName(mr);
     bool found = false, handle = false;
     for (size_t i = 0; i < count; ++i) {
         if (parts[i].isEmpty())
@@ -3277,21 +3280,23 @@ Value Value::objectConcatN(const Value *parts, size_t count, const Dims &outDims
             clsName = parts[i].objectClassName();
             handle = parts[i].objectIsHandle();
             found = true;
-        } else if (parts[i].objectClassName() != clsName) {
-            auto isGraphicsCls = [](const std::string &c) {
-                return c.rfind("matlab.graphics.", 0) == 0 || c.rfind("matlab.ui.", 0) == 0;
-            };
-            if (isGraphicsCls(clsName) && isGraphicsCls(parts[i].objectClassName())) {
-                clsName = "matlab.graphics.Graphics";
-            } else {
-                throw std::runtime_error("Cannot concatenate objects of different classes");
+        } else {
+            const keel::String otherCls = parts[i].objectClassName();
+            if (otherCls != clsName) {
+                auto isGraphicsCls = [](keel::StringRef c) {
+                    return c.starts_with("matlab.graphics.") || c.starts_with("matlab.ui.");
+                };
+                if (isGraphicsCls(clsName) && isGraphicsCls(otherCls)) {
+                    clsName.assign("matlab.graphics.Graphics");
+                } else {
+                    throw std::runtime_error("Cannot concatenate objects of different classes");
+                }
             }
         }
     }
-    auto *h = new HeapObject();
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::OBJECT;
-    h->alloc = mr;
-    h->objClass = new std::string(clsName);
+    h->objClass = h->allocNew<keel::String>(clsName.as_ref(), h->alloc);
     h->objIsHandle = handle;
     h->dims = outDims;
     for (size_t i = 0; i < count; ++i) {
@@ -3301,7 +3306,7 @@ Value Value::objectConcatN(const Value *parts, size_t count, const Dims &outDims
             h->objStates.push_back((handle || !st) ? st : st->deepCopy(mr));
     }
     Value out;
-    out.heap_ = h;
+    out.heap_ = h.release();
     return out;
 }
 
@@ -3310,7 +3315,7 @@ Value Value::objectTranspose(keel::Allocator *mr) const
     if (!isObject())
         return Value();
     const size_t R = heap_->dims.rows(), C = heap_->dims.cols();
-    std::vector<size_t> src(R * C);
+    keel::SmallArray<size_t, 32> src(R * C, mr ? mr : keel::default_allocator());
     // result is C×R; result(i,j) [col-major k=j*C+i] = src(j,i) [k=i*R+j].
     for (size_t j = 0; j < R; ++j)     // result columns
         for (size_t i = 0; i < C; ++i) // result rows
@@ -3324,33 +3329,33 @@ void Value::objectEnsureArrayLike(const Value &proto, keel::Allocator *mr)
 {
     if (isObject())
         return;
-    auto *h = new HeapObject();
+    const keel::String protoCls = proto.objectClassName();
+    HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::OBJECT;
-    h->alloc = mr;
-    h->objClass = new std::string(proto.objectClassName());
+    h->objClass = h->allocNew<keel::String>(protoCls.as_ref(), h->alloc);
     h->objIsHandle = proto.objectIsHandle();
     h->dims = Dims(size_t{0}, size_t{0}); // 0×0; `{0,0}` would pick the ptr ctor
     Value fresh;
-    fresh.heap_ = h;
-    *this = std::move(fresh);
+    fresh.heap_ = h.release();
+    *this = keel::move(fresh);
 }
 
-void Value::objectAssignLinear(const std::vector<size_t> &pos, const Value &rhs,
+void Value::objectAssignLinear(keel::ArrayRef<keel::usize> pos, const Value &rhs,
                                const Value &fill, keel::Allocator *mr)
 {
     if (!mr)
-        mr = (heap_ && heap_->alloc) ? heap_->alloc
-                                  : (rhs.heap_ && rhs.heap_->alloc
-                                         ? rhs.heap_->alloc
-                                         : keel::default_allocator());
+        mr = (isHeap() && heap_->alloc) ? heap_->alloc
+                                        : (rhs.isHeap() && rhs.heap_->alloc
+                                               ? rhs.heap_->alloc
+                                               : keel::default_allocator());
     objectEnsureArrayLike(rhs, mr);
     detach(); // HeapObject-level COW before in-place growth/store
     const bool handle = heap_->objIsHandle;
-    auto sharedOf = [](const Value &v) -> std::shared_ptr<ObjectState> {
+    auto sharedOf = [](const Value &v) -> keel::Arc<ObjectState> {
         return (v.isObject() && !v.heap_->objStates.empty()) ? v.heap_->objStates.front()
-                                                             : nullptr;
+                                                             : keel::Arc<ObjectState>{};
     };
-    auto indep = [&](const std::shared_ptr<ObjectState> &s) {
+    auto indep = [&](const keel::Arc<ObjectState> &s) {
         return s ? s->deepCopy(mr) : s; // independent default for gaps
     };
     // RHS feeds one element per target, or a scalar broadcast to all.
@@ -3360,14 +3365,14 @@ void Value::objectAssignLinear(const std::vector<size_t> &pos, const Value &rhs,
         throw std::runtime_error(
             "Unable to perform assignment because the left and right sides have a "
             "different number of elements.");
-    auto rhsSlot = [&](size_t k) -> std::shared_ptr<ObjectState> {
+    auto rhsSlot = [&](size_t k) -> keel::Arc<ObjectState> {
         const auto &sp = rhs.heap_->objStates[broadcast ? 0 : k];
         return handle ? sp : (sp ? sp->deepCopy(mr) : sp); // alias vs deep copy
     };
 
     size_t maxPos = 0;
     for (size_t p : pos)
-        maxPos = std::max(maxPos, p + 1);
+        maxPos = keel::max(maxPos, p + 1);
     auto &states = heap_->objStates;
     if (maxPos > states.size()) {
         // Out-of-bounds linear growth is only defined for a vector (or empty);
@@ -3376,7 +3381,7 @@ void Value::objectAssignLinear(const std::vector<size_t> &pos, const Value &rhs,
             throw std::runtime_error(
                 "Unable to grow a 2-D object array via a single linear index");
         const bool col = heap_->dims.cols() == 1 && heap_->dims.rows() > 1;
-        std::shared_ptr<ObjectState> fillState = sharedOf(fill);
+        keel::Arc<ObjectState> fillState = sharedOf(fill);
         while (states.size() < maxPos)
             states.push_back(indep(fillState));
         heap_->dims = col ? Dims(states.size(), size_t{1}) : Dims(size_t{1}, states.size());
@@ -3385,36 +3390,36 @@ void Value::objectAssignLinear(const std::vector<size_t> &pos, const Value &rhs,
         states[pos[k]] = rhsSlot(k);
 }
 
-void Value::objectAssignND(const std::vector<std::vector<size_t>> &perDim,
+void Value::objectAssignND(keel::ArrayRef<keel::Array<keel::usize>> perDim,
                            const Value &rhs, const Value &fill,
                            keel::Allocator *mr)
 {
     if (!mr)
-        mr = (heap_ && heap_->alloc) ? heap_->alloc
-                                  : (rhs.heap_ && rhs.heap_->alloc
-                                         ? rhs.heap_->alloc
-                                         : keel::default_allocator());
+        mr = (isHeap() && heap_->alloc) ? heap_->alloc
+                                        : (rhs.isHeap() && rhs.heap_->alloc
+                                               ? rhs.heap_->alloc
+                                               : keel::default_allocator());
     objectEnsureArrayLike(rhs, mr);
     detach();
     const bool handle = heap_->objIsHandle;
-    auto sharedOf = [](const Value &v) -> std::shared_ptr<ObjectState> {
+    auto sharedOf = [](const Value &v) -> keel::Arc<ObjectState> {
         return (v.isObject() && !v.heap_->objStates.empty()) ? v.heap_->objStates.front()
-                                                             : nullptr;
+                                                             : keel::Arc<ObjectState>{};
     };
-    auto indep = [&](const std::shared_ptr<ObjectState> &s) {
+    auto indep = [&](const keel::Arc<ObjectState> &s) {
         return s ? s->deepCopy(mr) : s;
     };
 
     const int curNd = heap_->dims.ndim();
-    const int nd = std::max(static_cast<int>(perDim.size()), curNd);
-    std::vector<size_t> newSize(nd);
+    const int nd = keel::max(static_cast<int>(perDim.size()), curNd);
+    keel::SmallArray<size_t, Dims::kMaxRank> newSize(static_cast<size_t>(nd), mr);
     for (int d = 0; d < nd; ++d) {
         size_t cur = (d < curNd) ? heap_->dims.dim(d) : 1;
         size_t need = 1;
         if (d < static_cast<int>(perDim.size()))
-            for (size_t v : perDim[d])
-                need = std::max(need, v + 1);
-        newSize[d] = std::max(cur, need);
+            for (size_t v : perDim[static_cast<size_t>(d)])
+                need = keel::max(need, v + 1);
+        newSize[static_cast<size_t>(d)] = keel::max(cur, need);
     }
     Dims newDims(newSize.data(), nd);
 
@@ -3427,7 +3432,7 @@ void Value::objectAssignND(const std::vector<std::vector<size_t>> &perDim,
         throw std::runtime_error(
             "Unable to perform assignment because the left and right sides have a "
             "different number of elements.");
-    auto rhsSlot = [&](size_t k) -> std::shared_ptr<ObjectState> {
+    auto rhsSlot = [&](size_t k) -> keel::Arc<ObjectState> {
         const auto &sp = rhs.heap_->objStates[broadcast ? 0 : k];
         return handle ? sp : (sp ? sp->deepCopy(mr) : sp);
     };
@@ -3435,8 +3440,8 @@ void Value::objectAssignND(const std::vector<std::vector<size_t>> &perDim,
     if (!(newDims == heap_->dims)) {
         // Re-layout into the grown shape: default-fill, then move each old
         // element from its old column-major slot to its new one.
-        std::vector<std::shared_ptr<ObjectState>> neu(newDims.numel());
-        std::shared_ptr<ObjectState> fillState = sharedOf(fill);
+        keel::Array<keel::Arc<ObjectState>> neu(newDims.numel(), heap_->alloc);
+        keel::Arc<ObjectState> fillState = sharedOf(fill);
         for (auto &s : neu)
             s = indep(fillState);
         size_t oldStr[Dims::kMaxRank];
@@ -3448,9 +3453,9 @@ void Value::objectAssignND(const std::vector<std::vector<size_t>> &perDim,
             size_t newLin = 0;
             for (int d = 0; d < curNd; ++d)
                 newLin += ((k / oldStr[d]) % heap_->dims.dim(d)) * newStr[d];
-            neu[newLin] = std::move(heap_->objStates[k]);
+            neu[newLin] = keel::move(heap_->objStates[k]);
         }
-        heap_->objStates = std::move(neu);
+        heap_->objStates = keel::move(neu);
         heap_->dims = newDims;
     }
 
@@ -3459,16 +3464,16 @@ void Value::objectAssignND(const std::vector<std::vector<size_t>> &perDim,
     size_t str[Dims::kMaxRank];
     computeStridesColMajor(heap_->dims, str);
     const int pnd = static_cast<int>(perDim.size());
-    std::vector<size_t> counts(pnd);
+    keel::SmallArray<size_t, Dims::kMaxRank> counts(static_cast<size_t>(pnd), mr);
     for (int d = 0; d < pnd; ++d)
-        counts[d] = perDim[d].size();
+        counts[static_cast<size_t>(d)] = perDim[static_cast<size_t>(d)].size();
     Dims iter(counts.data(), pnd);
-    std::vector<size_t> coords(pnd, 0);
+    keel::SmallArray<size_t, Dims::kMaxRank> coords(static_cast<size_t>(pnd), size_t{0}, mr);
     size_t k = 0;
     do {
         size_t lin = 0;
         for (int d = 0; d < pnd; ++d)
-            lin += perDim[d][coords[d]] * str[d];
+            lin += perDim[static_cast<size_t>(d)][coords[static_cast<size_t>(d)]] * str[d];
         heap_->objStates[lin] = rhsSlot(k++);
     } while (incrementCoords(coords.data(), iter));
 }
@@ -3501,7 +3506,7 @@ size_t Value::rawBytes() const
         return 0;
     const size_t es = elementSize(heap_->type);
     if (es > 0)
-        return std::min(heap_->dims.numel() * es, heap_->buffer->bytes());
+        return keel::min(heap_->dims.numel() * es, heap_->buffer->bytes());
     return heap_->buffer->bytes();
 }
 
@@ -3522,9 +3527,8 @@ size_t Value::deepBytes() const
         for (size_t e = 0; e < n; ++e) {
             const auto &fm = arr ? structArrayElem(e) : structFields();
             for (const auto &nm : order) {
-                auto it = fm.find(nm);
-                if (it != fm.end())
-                    total += it->second.deepBytes();
+                if (const Value *vp = fm.get(nm))
+                    total += vp->deepBytes();
             }
         }
         return total;
@@ -3583,7 +3587,8 @@ double Value::toScalar() const
             return st->native->asDouble();
     }
     if (!isHeap() || !heap_->buffer)
-        throw std::runtime_error("Cannot convert " + std::string(mtypeName(type())) + " to scalar");
+        throw std::runtime_error(
+            keel::format_small<96>("Cannot convert {} to scalar", mtypeName(type())).c_str());
     auto *h = heap_;
     if (h->type == ValueType::DOUBLE && h->dims.isScalar())
         return *static_cast<const double *>(h->buffer->data());
@@ -3621,7 +3626,8 @@ double Value::toScalar() const
         if (st && st->native)
             return st->native->asDouble();
     }
-    throw std::runtime_error("Cannot convert " + std::string(mtypeName(type())) + " to scalar");
+    throw std::runtime_error(
+        keel::format_small<96>("Cannot convert {} to scalar", mtypeName(type())).c_str());
 }
 bool Value::toBool() const
 {
@@ -3631,7 +3637,7 @@ bool Value::toBool() const
         throw std::runtime_error("NaN values cannot be converted to logicals.");
     };
     if (heap_ == nullptr) {
-        if (std::isnan(scalar_))
+        if (keel::is_nan(scalar_))
             nanErr();
         return scalar_ != 0.0;
     }
@@ -3646,13 +3652,13 @@ bool Value::toBool() const
         return *static_cast<const uint8_t *>(h->buffer->data()) != 0;
     if (h->type == ValueType::DOUBLE && h->dims.isScalar() && h->buffer) {
         double v = *static_cast<const double *>(h->buffer->data());
-        if (std::isnan(v))
+        if (keel::is_nan(v))
             nanErr();
         return v != 0.0;
     }
     if (h->type == ValueType::COMPLEX && h->dims.isScalar() && h->buffer) {
         auto c = *static_cast<const keel::c64 *>(h->buffer->data());
-        if (std::isnan(c.real()) || std::isnan(c.imag()))
+        if (keel::is_nan(c.real()) || keel::is_nan(c.imag()))
             nanErr();
         return c.real() != 0.0 || c.imag() != 0.0;
     }
@@ -3661,7 +3667,7 @@ bool Value::toBool() const
         size_t n = h->dims.numel();
         bool hasZero = false;
         for (size_t i = 0; i < n; ++i) {
-            if (std::isnan(dd[i])) // scan all — `if [0 NaN]` errors in MATLAB
+            if (keel::is_nan(dd[i])) // scan all — `if [0 NaN]` errors in MATLAB
                 nanErr();
             if (dd[i] == 0.0)
                 hasZero = true;
@@ -3681,7 +3687,7 @@ bool Value::toBool() const
         size_t n = h->dims.numel();
         bool hasZero = false;
         for (size_t i = 0; i < n; ++i) {
-            if (std::isnan(cd[i].real()) || std::isnan(cd[i].imag()))
+            if (keel::is_nan(cd[i].real()) || keel::is_nan(cd[i].imag()))
                 nanErr();
             if (cd[i].real() == 0.0 && cd[i].imag() == 0.0)
                 hasZero = true;
@@ -3699,50 +3705,51 @@ bool Value::toBool() const
         bool hasZero = false;
         for (size_t i = 0; i < n; ++i) {
             double v = elemAsDouble(i);
-            if (std::isnan(v))
+            if (keel::is_nan(v))
                 nanErr();
             if (v == 0.0)
                 hasZero = true;
         }
         return n > 0 && !hasZero;
     }
-    throw std::runtime_error("Cannot convert " + std::string(mtypeName(type())) + " to bool");
+    throw std::runtime_error(
+        keel::format_small<96>("Cannot convert {} to bool", mtypeName(type())).c_str());
 }
-std::string Value::toString() const
+keel::String Value::toString() const
 {
     if (isHeap() && heap_->type == ValueType::CHAR) {
         if (heap_->buffer)
-            return std::string(static_cast<const char *>(heap_->buffer->data()),
-                               heap_->dims.numel());
-        return std::string(); // empty string (1x0 char)
+            return keel::String(keel::StringRef(static_cast<const char *>(heap_->buffer->data()),
+                                                heap_->dims.numel()));
+        return {}; // empty string (1x0 char)
     }
     if (isHeap() && heap_->type == ValueType::STRING) {
         if (heap_->cellData && !heap_->cellData->empty())
             return (*heap_->cellData)[0].toString();
-        return std::string();
+        return {};
     }
     if (isHeap() && heap_->type == ValueType::FUNC_HANDLE && heap_->funcName)
-        return *heap_->funcName;
+        return heap_->funcName->clone();
     throw std::runtime_error("Not a char array");
 }
-std::string Value::funcHandleName() const
+keel::String Value::funcHandleName() const
 {
     if (isHeap() && heap_->funcName)
-        return *heap_->funcName;
-    return "";
+        return heap_->funcName->clone();
+    return {};
 }
-std::string Value::funcHandleSource() const
+keel::String Value::funcHandleSource() const
 {
     if (isHeap() && heap_->funcSource)
-        return *heap_->funcSource;
-    return "";
+        return heap_->funcSource->clone();
+    return {};
 }
-void Value::setFuncHandleSource(const std::string &source)
+void Value::setFuncHandleSource(keel::StringRef source)
 {
     if (!isHeap()) return;
     detach();
-    delete heap_->funcSource;
-    heap_->funcSource = new std::string(source);
+    heap_->allocDelete(heap_->funcSource);
+    heap_->funcSource = heap_->allocNew<keel::String>(source, heap_->alloc);
 }
 size_t Value::funcHandleCaptureCount() const
 {
@@ -3762,11 +3769,10 @@ void Value::setFuncHandleCaptures(const Value *captures, size_t count)
     if (!isHeap() || heap_->type != ValueType::FUNC_HANDLE)
         return;
     detach();
-    delete heap_->cellData;
-    heap_->cellData = nullptr;
+    heap_->allocDelete(heap_->cellData);
     if (count > 0 && captures) {
-        auto *cmr = heap_->alloc ? heap_->alloc : keel::default_allocator();
-        heap_->cellData = new keel::Array<Value>(keel::ArrayRef<Value>(captures, count), cmr);
+        heap_->cellData = heap_->allocNew<keel::Array<Value>>(
+            keel::ArrayRef<Value>(captures, count), heap_->alloc);
     }
 }
 
@@ -3890,7 +3896,7 @@ void Value::promoteToComplex(keel::Allocator *mr)
     detach(); // COW: ensure we have our own copy before mutating
     if (!mr)
         mr = heap_->alloc;
-    auto *newBuf = new DataBuffer(n * sizeof(keel::c64), mr);
+    auto *newBuf = DataBuffer::create(n * sizeof(keel::c64), mr);
     keel::c64 *dst = static_cast<keel::c64 *>(newBuf->data());
     if (n > 0 && heap_->buffer) {
         if (t == ValueType::SINGLE) {
@@ -3904,7 +3910,7 @@ void Value::promoteToComplex(keel::Allocator *mr)
         }
     }
     if (heap_->buffer && heap_->buffer->release())
-        delete heap_->buffer;
+        DataBuffer::destroy(heap_->buffer);
     heap_->buffer = newBuf;
     heap_->type = ValueType::COMPLEX;
     if (t == ValueType::SINGLE)
@@ -3953,7 +3959,7 @@ char &Value::charElemMut(size_t i)
     return charDataMut()[i];
 }
 
-std::string Value::charRow(size_t r) const
+keel::String Value::charRow(size_t r) const
 {
     if (type() != ValueType::CHAR)
         throw std::runtime_error("charRow: value is not a char array");
@@ -3962,10 +3968,9 @@ std::string Value::charRow(size_t r) const
         throw std::runtime_error("charRow: row index out of bounds");
     const char *cd = charData();
     size_t R = d.rows(), C = d.cols();
-    std::string s;
-    s.reserve(C);
+    keel::String s = keel::String::with_capacity(C);
     for (size_t c = 0; c < C; ++c)
-        s += cd[c * R + r];
+        s.push_back(cd[c * R + r]);
     return s;
 }
 
@@ -3973,13 +3978,12 @@ void Value::resize(size_t newRows, size_t newCols, keel::Allocator *mr)
 {
     if (heap_ == nullptr) {
         double v = scalar_;
-        auto *h = new HeapObject();
+        HeapGuard h(HeapObject::create(mr));
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
-        h->alloc = mr;
-        h->buffer = new DataBuffer(sizeof(double), mr);
+        h->buffer = DataBuffer::create(sizeof(double), h->alloc);
         *static_cast<double *>(h->buffer->data()) = v;
-        heap_ = h;
+        heap_ = h.release();
     }
     if (heap_ == emptyTag() || heap_ == deletedTag()) {
         *this = matrix(newRows, newCols, ValueType::DOUBLE, mr);
@@ -4008,7 +4012,7 @@ void Value::resize(size_t newRows, size_t newCols, keel::Allocator *mr)
     if (!mr)
         mr = heap_->alloc;
     const size_t oldR = heap_->dims.rows(), oldC = heap_->dims.cols();
-    const size_t cr = std::min(oldR, newRows), cc = std::min(oldC, newCols);
+    const size_t cr = keel::min(oldR, newRows), cc = keel::min(oldC, newCols);
     if (heap_->type == ValueType::CELL || heap_->type == ValueType::STRING) {
         Value grown = (heap_->type == ValueType::CELL)
                           ? Value::cell(newRows, newCols, mr)
@@ -4020,51 +4024,50 @@ void Value::resize(size_t newRows, size_t newCols, keel::Allocator *mr)
                 for (size_t r = 0; r < cr; ++r)
                     dst[c * newRows + r] = src[c * oldR + r];
         }
-        *this = std::move(grown);
+        *this = keel::move(grown);
         return;
     }
     if (heap_->type == ValueType::STRUCT) {
         Value grown = Value::structArray(newRows, newCols, mr);
         if (heap_->fieldOrder && grown.heap_->fieldOrder)
-            *grown.heap_->fieldOrder = *heap_->fieldOrder;
+            *grown.heap_->fieldOrder = heap_->fieldOrder->clone(grown.heap_->alloc);
         if (heap_->structArray) {
             auto &dst = *grown.heap_->structArray;
             const auto &src = *heap_->structArray;
-            auto *cmr = mr ? mr : keel::default_allocator();
+            auto *cmr = grown.heap_->alloc;
             for (size_t c = 0; c < cc; ++c)
                 for (size_t r = 0; r < cr; ++r)
-                    dst[c * newRows + r] = src[c * oldR + r];
+                    dst[c * newRows + r] = src[c * oldR + r].clone(cmr);
             if (heap_->fieldOrder) {
                 for (size_t i = 0; i < dst.size(); ++i)
                     for (const auto &fn : *heap_->fieldOrder)
-                        if (dst[i].find(fn) == dst[i].end())
-                            dst[i].emplace(fn, Value::matrix(0, 0, ValueType::DOUBLE, cmr));
+                        if (!dst[i].contains(fn))
+                            dst[i].put(fn.clone(cmr), Value::matrix(0, 0, ValueType::DOUBLE, cmr));
             }
         }
-        *this = std::move(grown);
+        *this = keel::move(grown);
         return;
     }
     const size_t es = elementSize(heap_->type);
     if (es == 0)
         throw std::runtime_error(
-            std::string("Cannot resize array of type '") + mtypeName(heap_->type) + "'");
+            keel::format_small<96>("Cannot resize array of type '{}'", mtypeName(heap_->type)).c_str());
     const size_t nb = checkedMulSize(checkedMulSize(newRows, newCols), es);
-    auto *nb2 = (nb > 0) ? new DataBuffer(nb, mr) : nullptr;
+    auto *nb2 = (nb > 0) ? DataBuffer::create(nb, mr) : nullptr;
     if (nb > 0) {
         // CHAR arrays fill with spaces; everything else with zeros
-        int fill = (heap_->type == ValueType::CHAR) ? ' ' : 0;
-        std::memset(nb2->data(), fill, nb);
+        keel::u8 fill = (heap_->type == ValueType::CHAR) ? static_cast<keel::u8>(' ') : keel::u8{0};
+        keel::mem_set(nb2->data(), fill, nb);
     }
     if (heap_->buffer && nb2 && cr > 0 && cc > 0) {
         const char *s = static_cast<const char *>(heap_->buffer->data());
         char *d = static_cast<char *>(nb2->data());
         for (size_t c = 0; c < cc; ++c)
-            std::memcpy(d + c * newRows * es, s + c * oldR * es, cr * es);
+            keel::mem_copy(d + c * newRows * es, s + c * oldR * es, cr * es);
     }
     if (heap_->buffer && heap_->buffer->release())
-        delete heap_->buffer;
+        DataBuffer::destroy(heap_->buffer);
     heap_->buffer = nb2;
-    heap_->alloc = mr;
     heap_->dims = {newRows, newCols};
     heap_->appendCapacity = 0;
 }
@@ -4077,13 +4080,12 @@ void Value::resize3d(size_t nr, size_t nc, size_t np, keel::Allocator *mr)
     }
     if (heap_ == nullptr) {
         double v = scalar_;
-        auto *h = new HeapObject();
+        HeapGuard h(HeapObject::create(mr));
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
-        h->alloc = mr;
-        h->buffer = new DataBuffer(sizeof(double), mr);
+        h->buffer = DataBuffer::create(sizeof(double), h->alloc);
         *static_cast<double *>(h->buffer->data()) = v;
-        heap_ = h;
+        heap_ = h.release();
     }
     if (heap_ == emptyTag() || heap_ == deletedTag()) {
         *this = matrix3d(nr, nc, np, ValueType::DOUBLE, mr);
@@ -4099,7 +4101,7 @@ void Value::resize3d(size_t nr, size_t nc, size_t np, keel::Allocator *mr)
         mr = heap_->alloc;
     const size_t oR = heap_->dims.rows(), oC = heap_->dims.cols(),
                  oP = heap_->dims.dim(2);
-    const size_t cr = std::min(oR, nr), cc = std::min(oC, nc), cp = std::min(oP, np);
+    const size_t cr = keel::min(oR, nr), cc = keel::min(oC, nc), cp = keel::min(oP, np);
     if (heap_->type == ValueType::CELL || heap_->type == ValueType::STRING) {
         Value grown = (heap_->type == ValueType::CELL)
                           ? Value::cell3D(nr, nc, np, mr)
@@ -4112,32 +4114,31 @@ void Value::resize3d(size_t nr, size_t nc, size_t np, keel::Allocator *mr)
                     for (size_t r = 0; r < cr; ++r)
                         dst[p * nr * nc + c * nr + r] = src[p * oR * oC + c * oR + r];
         }
-        *this = std::move(grown);
+        *this = keel::move(grown);
         return;
     }
     const size_t es = elementSize(heap_->type);
     if (es == 0)
         throw std::runtime_error(
-            std::string("Cannot resize array of type '") + mtypeName(heap_->type) + "'");
+            keel::format_small<96>("Cannot resize array of type '{}'", mtypeName(heap_->type)).c_str());
     const size_t nb = checkedMulSize(checkedMulSize(checkedMulSize(nr, nc), np), es);
-    auto *nb2 = (nb > 0) ? new DataBuffer(nb, mr) : nullptr;
+    auto *nb2 = (nb > 0) ? DataBuffer::create(nb, mr) : nullptr;
     if (nb > 0) {
-        int fill = (heap_->type == ValueType::CHAR) ? ' ' : 0;
-        std::memset(nb2->data(), fill, nb);
+        keel::u8 fill = (heap_->type == ValueType::CHAR) ? static_cast<keel::u8>(' ') : keel::u8{0};
+        keel::mem_set(nb2->data(), fill, nb);
     }
     if (heap_->buffer && nb2 && cr > 0 && cc > 0 && cp > 0) {
         const char *s = static_cast<const char *>(heap_->buffer->data());
         char *d = static_cast<char *>(nb2->data());
         for (size_t p = 0; p < cp; ++p)
             for (size_t c = 0; c < cc; ++c)
-                std::memcpy(d + (p * nr * nc + c * nr) * es,
-                            s + (p * oR * oC + c * oR) * es,
-                            cr * es);
+                keel::mem_copy(d + (p * nr * nc + c * nr) * es,
+                               s + (p * oR * oC + c * oR) * es,
+                               cr * es);
     }
     if (heap_->buffer && heap_->buffer->release())
-        delete heap_->buffer;
+        DataBuffer::destroy(heap_->buffer);
     heap_->buffer = nb2;
-    heap_->alloc = mr;
     heap_->dims = (np <= 1) ? Dims{nr, nc} : Dims{nr, nc, np};
     heap_->appendCapacity = 0;
 }
@@ -4155,13 +4156,12 @@ void Value::resizeND(const size_t *newDims, int nd, keel::Allocator *mr)
     // assume heap_ is set and detach() is meaningful.
     if (heap_ == nullptr) {
         double v = scalar_;
-        auto *h = new HeapObject();
+        HeapGuard h(HeapObject::create(mr));
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
-        h->alloc = mr;
-        h->buffer = new DataBuffer(sizeof(double), mr);
+        h->buffer = DataBuffer::create(sizeof(double), h->alloc);
         *static_cast<double *>(h->buffer->data()) = v;
-        heap_ = h;
+        heap_ = h.release();
     }
     // Empty (tag) → fresh DOUBLE heap with the requested shape; no
     // existing data to preserve. Same path is used for the auto-grow
@@ -4189,11 +4189,11 @@ void Value::resizeND(const size_t *newDims, int nd, keel::Allocator *mr)
     Dims newD(newDims, nd);
     computeStridesColMajor(newD, newStrides);
 
-    const int commonNd = std::min(nd, oldNd);
+    const int commonNd = keel::min(nd, oldNd);
     size_t commonDims[kMaxNd];
     size_t commonTotal = 1;
     for (int i = 0; i < commonNd; ++i) {
-        commonDims[i] = std::min(oldDims.dim(i), newDims[i]);
+        commonDims[i] = keel::min(oldDims.dim(i), newDims[i]);
         commonTotal *= commonDims[i];
     }
 
@@ -4215,20 +4215,20 @@ void Value::resizeND(const size_t *newDims, int nd, keel::Allocator *mr)
                 dst[newOff] = src[oldOff];
             } while (incrementCoords(coords, commonD));
         }
-        *this = std::move(newArr);
+        *this = keel::move(newArr);
         return;
     }
 
     const size_t es = elementSize(t);
     if (es == 0)
         throw std::runtime_error(
-            std::string("resizeND not supported for type '") + mtypeName(t) + "'");
+            keel::format_small<96>("resizeND not supported for type '{}'", mtypeName(t)).c_str());
 
     const size_t nb = checkedMulSize(newTotal, es);
-    auto *nb2 = (nb > 0) ? new DataBuffer(nb, mr) : nullptr;
+    auto *nb2 = (nb > 0) ? DataBuffer::create(nb, mr) : nullptr;
     if (nb > 0) {
-        const int fill = (t == ValueType::CHAR) ? ' ' : 0;
-        std::memset(nb2->data(), fill, nb);
+        const keel::u8 fill = (t == ValueType::CHAR) ? static_cast<keel::u8>(' ') : keel::u8{0};
+        keel::mem_set(nb2->data(), fill, nb);
     }
     if (heap_->buffer && nb2 && commonTotal > 0) {
         const char *src = static_cast<const char *>(heap_->buffer->data());
@@ -4241,13 +4241,12 @@ void Value::resizeND(const size_t *newDims, int nd, keel::Allocator *mr)
                 oldOff += coords[i] * oldStrides[i];
                 newOff += coords[i] * newStrides[i];
             }
-            std::memcpy(dst + newOff * es, src + oldOff * es, es);
+            keel::mem_copy(dst + newOff * es, src + oldOff * es, es);
         } while (incrementCoords(coords, commonD));
     }
     if (heap_->buffer && heap_->buffer->release())
-        delete heap_->buffer;
+        DataBuffer::destroy(heap_->buffer);
     heap_->buffer = nb2;
-    heap_->alloc = mr;
     heap_->dims = newD;
     heap_->appendCapacity = 0;
 }
@@ -4283,14 +4282,13 @@ void Value::appendScalar(double v, keel::Allocator *mr)
             mr = heap_->alloc;
         releaseHeap();
         size_t cap = 8;
-        std::unique_ptr<HeapObject> h(new HeapObject());
+        HeapGuard h(HeapObject::create(mr));
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
-        h->alloc = mr;
-        h->buffer = new DataBuffer(cap * sizeof(double), mr);
+        h->buffer = DataBuffer::create(cap * sizeof(double), h->alloc);
         h->appendCapacity = cap;
         double *d = static_cast<double *>(h->buffer->data());
-        std::memset(d, 0, cap * sizeof(double));
+        keel::mem_zero(d, cap * sizeof(double));
         d[0] = v;
         heap_ = h.release();
         return;
@@ -4299,18 +4297,17 @@ void Value::appendScalar(double v, keel::Allocator *mr)
     // Inline scalar → promote to a 2-element heap double with headroom.
     if (heap_ == nullptr) {
         double old = scalar_;
-        size_t cap = std::max(size_t(8), newN * 2);
-        auto *h = new HeapObject();
+        size_t cap = keel::max(size_t(8), newN * 2);
+        HeapGuard h(HeapObject::create(mr));
         h->type = ValueType::DOUBLE;
         h->dims = {1, newN};
-        h->alloc = mr;
-        h->buffer = new DataBuffer(cap * sizeof(double), mr);
+        h->buffer = DataBuffer::create(cap * sizeof(double), h->alloc);
         h->appendCapacity = cap;
         double *d = static_cast<double *>(h->buffer->data());
-        std::memset(d, 0, cap * sizeof(double));
+        keel::mem_zero(d, cap * sizeof(double));
         d[0] = old;
         d[1] = v;
-        heap_ = h;
+        heap_ = h.release();
         return;
     }
     if (!isHeap())
@@ -4326,19 +4323,18 @@ void Value::appendScalar(double v, keel::Allocator *mr)
         heap_->dims = {1, newN};
         return;
     }
-    size_t nc = std::max(newN, cap * 2);
+    size_t nc = keel::max(newN, cap * 2);
     if (nc < 8)
         nc = 8;
-    auto *nb = new DataBuffer(nc * sizeof(double), mr);
+    auto *nb = DataBuffer::create(nc * sizeof(double), mr);
     double *d = static_cast<double *>(nb->data());
-    std::memset(d, 0, nc * sizeof(double));
+    keel::mem_zero(d, nc * sizeof(double));
     if (oldN > 0 && heap_->buffer)
-        std::memcpy(d, heap_->buffer->data(), oldN * sizeof(double));
+        keel::mem_copy(d, heap_->buffer->data(), oldN * sizeof(double));
     d[oldN] = v;
     if (heap_->buffer && heap_->buffer->release())
-        delete heap_->buffer;
+        DataBuffer::destroy(heap_->buffer);
     heap_->buffer = nb;
-    heap_->alloc = mr;
     heap_->dims = {1, newN};
     heap_->appendCapacity = nc;
 }
@@ -4354,29 +4350,27 @@ void Value::appendScalarCol(double v, keel::Allocator *mr)
             mr = heap_->alloc;
         releaseHeap();
         size_t cap = 8;
-        std::unique_ptr<HeapObject> h(new HeapObject());
+        HeapGuard h(HeapObject::create(mr));
         h->type = ValueType::DOUBLE;
         h->dims = {newN, 1};
-        h->alloc = mr;
-        h->buffer = new DataBuffer(cap * sizeof(double), mr);
+        h->buffer = DataBuffer::create(cap * sizeof(double), h->alloc);
         h->appendCapacity = cap;
         double *d = static_cast<double *>(h->buffer->data());
-        std::memset(d, 0, cap * sizeof(double));
+        keel::mem_zero(d, cap * sizeof(double));
         d[0] = v;
         heap_ = h.release();
         return;
     }
     if (heap_ == nullptr) {
         double old = scalar_;
-        size_t cap = std::max(size_t(8), newN * 2);
-        std::unique_ptr<HeapObject> h(new HeapObject());
+        size_t cap = keel::max(size_t(8), newN * 2);
+        HeapGuard h(HeapObject::create(mr));
         h->type = ValueType::DOUBLE;
         h->dims = {newN, 1};
-        h->alloc = mr;
-        h->buffer = new DataBuffer(cap * sizeof(double), mr);
+        h->buffer = DataBuffer::create(cap * sizeof(double), h->alloc);
         h->appendCapacity = cap;
         double *d = static_cast<double *>(h->buffer->data());
-        std::memset(d, 0, cap * sizeof(double));
+        keel::mem_zero(d, cap * sizeof(double));
         d[0] = old;
         d[1] = v;
         heap_ = h.release();
@@ -4395,19 +4389,18 @@ void Value::appendScalarCol(double v, keel::Allocator *mr)
         heap_->dims = {newN, 1};
         return;
     }
-    size_t nc = std::max(newN, cap * 2);
+    size_t nc = keel::max(newN, cap * 2);
     if (nc < 8)
         nc = 8;
-    auto *nb = new DataBuffer(nc * sizeof(double), mr);
+    auto *nb = DataBuffer::create(nc * sizeof(double), mr);
     double *d = static_cast<double *>(nb->data());
-    std::memset(d, 0, nc * sizeof(double));
+    keel::mem_zero(d, nc * sizeof(double));
     if (oldN > 0 && heap_->buffer)
-        std::memcpy(d, heap_->buffer->data(), oldN * sizeof(double));
+        keel::mem_copy(d, heap_->buffer->data(), oldN * sizeof(double));
     d[oldN] = v;
     if (heap_->buffer && heap_->buffer->release())
-        delete heap_->buffer;
+        DataBuffer::destroy(heap_->buffer);
     heap_->buffer = nb;
-    heap_->alloc = mr;
     heap_->appendCapacity = nc;
     heap_->dims = {newN, 1};
 }
@@ -4443,37 +4436,39 @@ const keel::Array<Value> &Value::cellDataVec() const
     return *heap_->cellData;
 }
 
-Value &Value::field(const std::string &n)
+Value &Value::field(keel::StringRef n)
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         throw std::runtime_error("Not a struct");
     if (heap_->structArray->size() != 1)
         throw std::runtime_error(
-            "Cannot dot-index a non-scalar struct array directly; "
-            "use s(i)." + n + " or arrayfun.");
+            keel::format_small<192>(
+                "Cannot dot-index a non-scalar struct array directly; "
+                "use s(i).{} or arrayfun.", n).c_str());
     detach();
-    // BUG #15: append to insertion-order tracker BEFORE auto-create via [].
+    // BUG #15: append to insertion-order tracker BEFORE auto-create.
     auto &m = (*heap_->structArray)[0];
-    if (m.find(n) == m.end()) {
-        if (heap_->fieldOrder) heap_->fieldOrder->push_back(n);
-    }
-    return m[n];
+    if (Value *vp = m.get(n))
+        return *vp;
+    if (heap_->fieldOrder)
+        heap_->fieldOrder->push_back(keel::String(n, heap_->alloc));
+    return *m.try_insert(keel::String(n, heap_->alloc), Value()).value;
 }
-const Value &Value::field(const std::string &n) const
+const Value &Value::field(keel::StringRef n) const
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         throw std::runtime_error("Not a struct");
     if (heap_->structArray->size() != 1)
         throw std::runtime_error(
-            "Cannot dot-index a non-scalar struct array directly; "
-            "use s(i)." + n + " or arrayfun.");
+            keel::format_small<192>(
+                "Cannot dot-index a non-scalar struct array directly; "
+                "use s(i).{} or arrayfun.", n).c_str());
     const auto &m = (*heap_->structArray)[0];
-    auto it = m.find(n);
-    if (it == m.end())
-        throw std::runtime_error("Field not found: " + n);
-    return it->second;
+    if (const Value *vp = m.get(n))
+        return *vp;
+    throw std::runtime_error(keel::format_small<128>("Field not found: {}", n).c_str());
 }
-bool Value::hasField(const std::string &n) const
+bool Value::hasField(keel::StringRef n) const
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         return false;
@@ -4484,9 +4479,9 @@ bool Value::hasField(const std::string &n) const
         }
         return false;
     }
-    return (*heap_->structArray)[0].count(n) > 0;
+    return (*heap_->structArray)[0].contains(n);
 }
-std::map<std::string, Value> &Value::structFields()
+keel::HashMap<keel::String, Value> &Value::structFields()
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray
         || heap_->structArray->size() != 1)
@@ -4494,7 +4489,7 @@ std::map<std::string, Value> &Value::structFields()
     detach();
     return (*heap_->structArray)[0];
 }
-const std::map<std::string, Value> &Value::structFields() const
+const keel::HashMap<keel::String, Value> &Value::structFields() const
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray
         || heap_->structArray->size() != 1)
@@ -4515,7 +4510,7 @@ void Value::growStructArrayTo(size_t idx, keel::Allocator *mr)
 {
     if (!mr) {
         mr = (isHeap() && heap_->alloc) ? heap_->alloc
-                                      : keel::default_allocator();
+                                        : keel::default_allocator();
     }
     if (isEmpty() || !isHeap() || heap_->type != ValueType::STRUCT
         || !heap_->structArray) {
@@ -4533,14 +4528,14 @@ void Value::growStructArrayTo(size_t idx, keel::Allocator *mr)
     const size_t oldSize = heap_->structArray->size();
     heap_->dims = Dims(newRows, newCols);
     if (!heap_->fieldOrder)
-        heap_->fieldOrder = new std::vector<std::string>();
+        heap_->fieldOrder = heap_->allocNew<keel::Array<keel::String>>(heap_->alloc);
     if (newSize > heap_->structArray->capacity())
-        heap_->structArray->reserve(std::max(newSize, heap_->structArray->capacity() * 2));
+        heap_->structArray->reserve(keel::max(newSize, heap_->structArray->capacity() * 2));
     for (size_t k = oldSize; k < newSize; ++k) {
-        heap_->structArray->emplace_back();
+        heap_->structArray->push_back(keel::HashMap<keel::String, Value>(heap_->alloc));
         auto &dst = heap_->structArray->back();
         for (const auto &fn : *heap_->fieldOrder)
-            dst.try_emplace(fn, Value());
+            dst.try_insert(fn.clone(heap_->alloc), Value());
     }
 }
 size_t Value::growStructArrayND(const size_t *coords, int nd,
@@ -4550,7 +4545,7 @@ size_t Value::growStructArrayND(const size_t *coords, int nd,
         throw std::runtime_error("struct-array subscript rank out of range");
     if (!mr) {
         mr = (isHeap() && heap_->alloc) ? heap_->alloc
-                                      : keel::default_allocator();
+                                        : keel::default_allocator();
     }
     if (isEmpty() || !isHeap() || heap_->type != ValueType::STRUCT
         || !heap_->structArray) {
@@ -4559,7 +4554,7 @@ size_t Value::growStructArrayND(const size_t *coords, int nd,
 
     const Dims oldD = dims();
     const int oldNd = oldD.ndim();
-    const int newNd = std::max(nd, oldNd);
+    const int newNd = keel::max(nd, oldNd);
 
     size_t need[Dims::kMaxRank];
     for (int i = 0; i < newNd; ++i)
@@ -4586,19 +4581,19 @@ size_t Value::growStructArrayND(const size_t *coords, int nd,
 
     // Build a fresh struct heap with the N-D shape `need` and copy the
     // existing elements to their column-major positions in the new shape.
-    size_t newTotal = 1;
-    for (int i = 0; i < newNd; ++i)
-        newTotal *= need[i];
+    const size_t newTotal = checkedMulDims(need, newNd);
 
     Value grown;
     {
-        auto *h = new HeapObject();
+        HeapGuard h(HeapObject::create(mr));
         h->type = ValueType::STRUCT;
         h->dims = Dims(need, newNd);
-        h->alloc = mr;
-        h->structArray = new std::vector<std::map<std::string, Value>>(newTotal);
-        h->fieldOrder = new std::vector<std::string>();
-        grown.heap_ = h;
+        h->structArray = h->allocNew<keel::Array<keel::HashMap<keel::String, Value>>>(h->alloc);
+        h->structArray->reserve(newTotal);
+        for (size_t i = 0; i < newTotal; ++i)
+            h->structArray->push_back(keel::HashMap<keel::String, Value>(h->alloc));
+        h->fieldOrder = h->allocNew<keel::Array<keel::String>>(h->alloc);
+        grown.heap_ = h.release();
     }
     size_t oldStride[Dims::kMaxRank], newStride[Dims::kMaxRank];
     size_t s = 1;
@@ -4613,20 +4608,17 @@ size_t Value::growStructArrayND(const size_t *coords, int nd,
             size_t c = (rem / oldStride[i]) % oldD.dim(i);
             newLin += c * newStride[i];
         }
-        auto &dst = grown.structArrayElem(newLin);
-        const auto &src = self.structArrayElem(lin);
-        for (const auto &[kn, vv] : src)
-            dst.emplace(kn, vv);
+        grown.structArrayElem(newLin) = self.structArrayElem(lin).clone(grown.heap_->alloc);
     }
-    if (heap_ && heap_->fieldOrder && grown.heap_ && grown.heap_->fieldOrder) {
-        *grown.heap_->fieldOrder = *heap_->fieldOrder;
+    if (isHeap() && heap_->fieldOrder && grown.heap_ && grown.heap_->fieldOrder) {
+        *grown.heap_->fieldOrder = heap_->fieldOrder->clone(grown.heap_->alloc);
         for (size_t k = 0; k < newTotal; ++k) {
             auto &dst = (*grown.heap_->structArray)[k];
             for (const auto &fn : *grown.heap_->fieldOrder)
-                dst.try_emplace(fn, Value());
+                dst.try_insert(fn.clone(grown.heap_->alloc), Value());
         }
     }
-    *this = std::move(grown);
+    *this = keel::move(grown);
     return linearIn(need);
 }
 
@@ -4636,7 +4628,7 @@ size_t Value::growCellTo(const size_t *coords, int nd, keel::Allocator *mr)
         throw std::runtime_error("cell subscript rank out of range");
     if (!mr) {
         mr = (isHeap() && heap_->alloc) ? heap_->alloc
-                                      : keel::default_allocator();
+                                        : keel::default_allocator();
     }
     if (isUnset() || isEmpty())
         *this = Value::cell(0, 0, mr);
@@ -4661,7 +4653,7 @@ size_t Value::growCellTo(const size_t *coords, int nd, keel::Allocator *mr)
             const size_t newSize = i + 1;
             heap_->dims = isCol ? Dims(newSize, 1) : Dims(1, newSize);
             if (newSize > heap_->cellData->capacity())
-                heap_->cellData->reserve(std::max(newSize, heap_->cellData->capacity() * 2));
+                heap_->cellData->reserve(keel::max(newSize, heap_->cellData->capacity() * 2));
             heap_->cellData->resize(newSize);
         }
         return i;
@@ -4669,7 +4661,7 @@ size_t Value::growCellTo(const size_t *coords, int nd, keel::Allocator *mr)
 
     const Dims oldD = dims();
     const int oldNd = oldD.ndim();
-    const int newNd = std::max(nd, oldNd);
+    const int newNd = keel::max(nd, oldNd);
     size_t need[Dims::kMaxRank];
     for (int i = 0; i < newNd; ++i)
         need[i] = (i < oldNd) ? oldD.dim(i) : 1;
@@ -4701,10 +4693,10 @@ size_t Value::growCellTo(const size_t *coords, int nd, keel::Allocator *mr)
         }
         grown.cellAt(newLin) = self.cellAt(lin);
     }
-    *this = std::move(grown);
+    *this = keel::move(grown);
     return linearIn(dims());
 }
-std::map<std::string, Value> &Value::structArrayElem(size_t i)
+keel::HashMap<keel::String, Value> &Value::structArrayElem(size_t i)
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         throw std::runtime_error("Not a struct");
@@ -4713,7 +4705,7 @@ std::map<std::string, Value> &Value::structArrayElem(size_t i)
     detach();
     return (*heap_->structArray)[i];
 }
-const std::map<std::string, Value> &Value::structArrayElem(size_t i) const
+const keel::HashMap<keel::String, Value> &Value::structArrayElem(size_t i) const
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         throw std::runtime_error("Not a struct");
@@ -4724,17 +4716,26 @@ const std::map<std::string, Value> &Value::structArrayElem(size_t i) const
 
 // ── BUG #15: insertion-order helpers ───────────────────────────
 namespace {
-inline void appendIfNew(std::vector<std::string> *order,
-                         const std::string &name)
+inline void appendIfNew(keel::Array<keel::String> *order,
+                        keel::StringRef name,
+                        keel::Allocator *alloc)
 {
     if (!order) return;
     for (const auto &n : *order)
         if (n == name) return;
-    order->push_back(name);
+    order->push_back(keel::String(name, alloc));
 }
-} // anon
 
-void Value::setField(size_t linearIdx, const std::string &name, const Value &v)
+inline keel::FixedString<64> fmtGeneral(double v) noexcept
+{
+    keel::FixedString<64> out;
+    const keel::usize len = keel::format_f64_general(out.inline_buffer(), 63, v, 6, false);
+    out.set_inline_size(len);
+    return out;
+}
+} // namespace
+
+void Value::setField(size_t linearIdx, keel::StringRef name, const Value &v)
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         throw std::runtime_error("Not a struct");
@@ -4742,202 +4743,229 @@ void Value::setField(size_t linearIdx, const std::string &name, const Value &v)
         throw std::runtime_error("struct array index out of range");
     detach();
     // After detach heap_ may differ; re-fetch via heap_.
-    appendIfNew(heap_->fieldOrder, name);
+    appendIfNew(heap_->fieldOrder, name, heap_->alloc);
     if (heap_->structArray->size() > 1) {
         for (size_t k = 0; k < heap_->structArray->size(); ++k) {
-            if (k != linearIdx)
-                (*heap_->structArray)[k].try_emplace(name, Value());
+            if (k != linearIdx && !(*heap_->structArray)[k].contains(name))
+                (*heap_->structArray)[k].put(keel::String(name, heap_->alloc), Value());
         }
     }
-    (*heap_->structArray)[linearIdx][name] = v;
+    if (Value *vp = (*heap_->structArray)[linearIdx].get(name))
+        *vp = v;
+    else
+        (*heap_->structArray)[linearIdx].put(keel::String(name, heap_->alloc), v);
 }
 
-void Value::setFieldAll(const std::string &name, const Value &v)
+void Value::setFieldAll(keel::StringRef name, const Value &v)
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         throw std::runtime_error("Not a struct");
     detach();
-    appendIfNew(heap_->fieldOrder, name);
-    for (auto &m : *heap_->structArray)
-        m[name] = v;
+    appendIfNew(heap_->fieldOrder, name, heap_->alloc);
+    for (auto &m : *heap_->structArray) {
+        if (Value *vp = m.get(name))
+            *vp = v;
+        else
+            m.put(keel::String(name, heap_->alloc), v);
+    }
 }
 
-void Value::removeField(const std::string &name)
+void Value::removeField(keel::StringRef name)
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         return;
     detach();
     for (auto &m : *heap_->structArray)
-        m.erase(name);
+        m.remove(name);
     if (heap_->fieldOrder) {
         auto &v = *heap_->fieldOrder;
-        v.erase(std::remove(v.begin(), v.end(), name), v.end());
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (v[i] == name) {
+                v.erase(i);
+                break;
+            }
+        }
     }
 }
 
-std::vector<std::string> Value::fieldNamesInOrder() const
+keel::Array<keel::String> Value::fieldNamesInOrder() const
 {
-    std::vector<std::string> out;
+    keel::Array<keel::String> out;
     if (!isHeap() || heap_->type != ValueType::STRUCT) return out;
     if (heap_->fieldOrder && !heap_->fieldOrder->empty()) {
-        out.reserve(heap_->fieldOrder->size());
-        for (const auto &n : *heap_->fieldOrder) out.emplace_back(n);
+        out = heap_->fieldOrder->clone();
+        if (heap_->structArray && !heap_->structArray->empty()
+            && (*heap_->structArray)[0].size() > out.size()) {
+            keel::Array<keel::String> extra;
+            for (const auto &entry : (*heap_->structArray)[0]) {
+                bool seen = false;
+                for (const auto &existing : out) {
+                    if (existing == entry.key) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen)
+                    extra.push_back(entry.key.clone());
+            }
+            keel::sort(extra);
+            for (auto &e : extra)
+                out.push_back(keel::move(e));
+        }
         return out;
     }
     // Fallback: derive from element-0 map (alphabetical) for legacy
     // structs created via raw map insertion (no setField call).
     if (heap_->structArray && !heap_->structArray->empty()) {
-        for (const auto &[k, _] : (*heap_->structArray)[0])
-            out.emplace_back(k);
+        out.reserve((*heap_->structArray)[0].size());
+        for (const auto &entry : (*heap_->structArray)[0])
+            out.push_back(entry.key.clone());
+        keel::sort(out);
     }
     return out;
 }
 
-std::string Value::debugString() const
+keel::String Value::debugString() const
 {
-    std::ostringstream os;
+    keel::String os;
     ValueType t = type();
-    os << mtypeName(t) << " [" << dims().rows() << "x" << dims().cols();
+    keel::format_into(os, "{} [{}x{}", mtypeName(t), dims().rows(), dims().cols());
     if (dims().is3D())
-        os << "x" << dims().pages();
-    os << "]";
+        keel::format_into(os, "x{}", dims().pages());
+    os.push_back(']');
     if (t == ValueType::DOUBLE && numel() <= 20 && numel() > 0) {
-        os << " = ";
+        os.append(" = ");
         const double *dd = doubleData();
-        if (isScalar())
-            os << dd[0];
-        else {
-            os << "[";
+        if (isScalar()) {
+            os.append(fmtGeneral(dd[0]));
+        } else {
+            os.push_back('[');
             for (size_t i = 0; i < numel(); ++i) {
                 if (i)
-                    os << ", ";
-                os << dd[i];
+                    os.append(", ");
+                os.append(fmtGeneral(dd[i]));
             }
-            os << "]";
+            os.push_back(']');
         }
     }
     if (t == ValueType::COMPLEX && numel() <= 20 && numel() > 0 && isHeap() && heap_->buffer) {
-        os << " = ";
+        os.append(" = ");
         const keel::c64 *cd = complexData();
         if (isScalar()) {
-            os << cd[0].real();
+            os.append(fmtGeneral(cd[0].real()));
             if (cd[0].imag() >= 0)
-                os << "+";
-            os << cd[0].imag() << "i";
+                os.push_back('+');
+            os.append(fmtGeneral(cd[0].imag()));
+            os.push_back('i');
         } else {
-            os << "[";
+            os.push_back('[');
             for (size_t i = 0; i < numel(); ++i) {
                 if (i)
-                    os << ", ";
-                os << cd[i].real();
+                    os.append(", ");
+                os.append(fmtGeneral(cd[i].real()));
                 if (cd[i].imag() >= 0)
-                    os << "+";
-                os << cd[i].imag() << "i";
+                    os.push_back('+');
+                os.append(fmtGeneral(cd[i].imag()));
+                os.push_back('i');
             }
-            os << "]";
+            os.push_back(']');
         }
     }
     if (t == ValueType::LOGICAL && numel() > 0) {
-        os << " = ";
+        os.append(" = ");
         if (isScalar())
-            os << (toBool() ? "true" : "false");
+            os.append(toBool() ? "true" : "false");
         else if (isHeap() && heap_->buffer) {
             const uint8_t *ld = logicalData();
-            os << "[";
+            os.push_back('[');
             for (size_t i = 0; i < numel(); ++i) {
                 if (i)
-                    os << ", ";
-                os << (ld[i] ? "1" : "0");
+                    os.append(", ");
+                os.push_back(ld[i] ? '1' : '0');
             }
-            os << "]";
+            os.push_back(']');
         }
     }
     if (t == ValueType::CHAR && isHeap() && heap_->buffer)
-        os << " = '" << toString() << "'";
+        keel::format_into(os, " = '{}'", toString());
     if (t == ValueType::STRING) {
         if (isScalar())
-            os << " = \"" << toString() << "\"";
+            keel::format_into(os, " = \"{}\"", toString());
         else if (isHeap() && heap_->cellData) {
-            os << " [";
+            os.append(" [");
             for (size_t i = 0; i < heap_->cellData->size() && i < 10; ++i) {
                 if (i)
-                    os << ", ";
-                os << "\"" << (*heap_->cellData)[i].toString() << "\"";
+                    os.append(", ");
+                keel::format_into(os, "\"{}\"", (*heap_->cellData)[i].toString());
             }
-            os << "]";
+            os.push_back(']');
         }
     }
     if (t == ValueType::FUNC_HANDLE)
-        os << " = @" << funcHandleName();
+        keel::format_into(os, " = @{}", funcHandleName());
     if (t == ValueType::CELL && isHeap() && heap_->cellData) {
-        os << " {";
+        os.append(" {");
         for (size_t i = 0; i < heap_->cellData->size() && i < 10; ++i) {
             if (i)
-                os << ", ";
-            os << (*heap_->cellData)[i].debugString();
+                os.append(", ");
+            os.append((*heap_->cellData)[i].debugString());
         }
         if (heap_->cellData->size() > 10)
-            os << ", ...";
-        os << "}";
+            os.append(", ...");
+        os.push_back('}');
     }
-    return os.str();
+    return os;
 }
 
 // ============================================================
-// MATLAB-style display formatting
+// Display formatting
 // ============================================================
 
-// Format a double the way MATLAB does: integers without decimal point,
-// short format for floats, aligned columns for matrices.
-static std::string fmtDouble(double v)
+static keel::String fmtDouble(double v)
 {
-    if (std::isnan(v)) return "NaN";
-    if (std::isinf(v)) return v > 0 ? "Inf" : "-Inf";
-    if (v == 0.0) return "0";
+    if (keel::is_nan(v)) return keel::String::from("NaN");
+    if (keel::is_inf(v)) return keel::String::from(v > 0 ? "Inf" : "-Inf");
+    if (v == 0.0) return keel::String::from("0");
     // Integer check
-    if (v == std::floor(v) && std::abs(v) < 1e15) {
-        std::ostringstream os;
-        os << static_cast<int64_t>(v);
-        return os.str();
-    }
-    std::ostringstream os;
-    os << v;
-    return os.str();
+    if (keel::abs(v) < 1e15 && v == static_cast<double>(keel::floor_i64(v)))
+        return keel::format("{}", static_cast<int64_t>(v));
+    return keel::String::from(fmtGeneral(v));
 }
 
-static std::string fmtComplex(const keel::c64 &c)
+static keel::String fmtComplex(const keel::c64 &c)
 {
-    std::ostringstream os;
+    keel::String os;
     if (c.real() != 0.0 || c.imag() == 0.0)
-        os << fmtDouble(c.real());
+        os.append(fmtDouble(c.real()));
     if (c.imag() != 0.0) {
-        if (c.real() != 0.0 && c.imag() > 0) os << " + ";
-        else if (c.real() != 0.0 && c.imag() < 0) os << " - ";
-        double ai = std::abs(c.imag());
-        if (ai == 1.0)
-            os << "i";
-        else
-            os << fmtDouble(ai) << "i";
+        if (c.real() != 0.0 && c.imag() > 0) os.append(" + ");
+        else if (c.real() != 0.0 && c.imag() < 0) os.append(" - ");
+        double ai = keel::abs(c.imag());
+        if (ai == 1.0) {
+            os.push_back('i');
+        } else {
+            os.append(fmtDouble(ai));
+            os.push_back('i');
+        }
     }
-    return os.str();
+    return os;
 }
 
-std::string Value::formatDisplay(const std::string &name) const
+keel::String Value::formatDisplay(keel::StringRef name) const
 {
-    std::ostringstream os;
+    keel::String os;
 
-    // Header: "name =\n" (skip for "ans" — MATLAB prints "ans =\n" too, actually)
     if (!name.empty())
-        os << name << " =\n";
+        keel::format_into(os, "{} =\n", name);
 
     ValueType t = type();
 
     switch (t) {
     case ValueType::DOUBLE: {
         if (isScalar()) {
-            os << "   " << fmtDouble(toScalar()) << "\n";
+            keel::format_into(os, "   {}\n", fmtDouble(toScalar()));
         } else if (isEmpty()) {
-            os << "     []\n";
+            os.append("     []\n");
         } else {
             auto &d = dims();
             const size_t R = d.rows(), C = d.cols();
@@ -4945,75 +4973,73 @@ std::string Value::formatDisplay(const std::string &name) const
             const double *base0 = doubleData();
             forEachOuterPage(d, [&](size_t plin, const size_t *outerCoords) {
                 if (nd >= 3) {
-                    os << "\n(:,:";
+                    os.append("\n(:,:");
                     for (int i = 2; i < nd; ++i)
-                        os << "," << outerCoords[i - 2] + 1;
-                    os << ") =\n\n";
+                        keel::format_into(os, ",{}", outerCoords[i - 2] + 1);
+                    os.append(") =\n\n");
                 }
                 const double *page = base0 + plin * R * C;
-                std::vector<std::vector<std::string>> cells(R);
-                std::vector<size_t> colWidth(C, 0);
+                keel::Array<keel::String> cells(R * C);
+                keel::SmallArray<size_t, 32> colWidth(C, size_t{0});
                 for (size_t r = 0; r < R; ++r) {
-                    cells[r].resize(C);
                     for (size_t c = 0; c < C; ++c) {
-                        cells[r][c] = fmtDouble(page[c * R + r]);
-                        colWidth[c] = std::max(colWidth[c], cells[r][c].size());
+                        keel::String cell = fmtDouble(page[c * R + r]);
+                        colWidth[c] = keel::max(colWidth[c], cell.size());
+                        cells[r * C + c] = keel::move(cell);
                     }
                 }
                 for (size_t r = 0; r < R; ++r) {
-                    os << "   ";
+                    os.append("   ");
                     for (size_t c = 0; c < C; ++c) {
-                        size_t pad = colWidth[c] > cells[r][c].size()
-                                         ? colWidth[c] - cells[r][c].size()
-                                         : 0; // guard unsigned underflow → huge pad loop
-                        for (size_t i = 0; i < pad + 1; ++i) os << ' ';
-                        os << cells[r][c];
+                        const keel::String &cell = cells[r * C + c];
+                        size_t pad = colWidth[c] > cell.size()
+                                         ? colWidth[c] - cell.size()
+                                         : 0;
+                        for (size_t i = 0; i < pad + 1; ++i) os.push_back(' ');
+                        os.append(cell);
                     }
-                    os << "\n";
+                    os.push_back('\n');
                 }
             });
         }
         break;
     }
     case ValueType::CHAR: {
-        // Row (or 1×0) stays on a single quoted line, as before.
-        // Multi-row char matrix prints each row quoted on its own
-        // line, column-major — MATLAB's implicit-display layout.
         auto &d = dims();
         if (d.rows() <= 1) {
-            os << "   '" << toString() << "'\n";
+            keel::format_into(os, "   '{}'\n", toString());
         } else {
             for (size_t r = 0; r < d.rows(); ++r)
-                os << "   '" << charRow(r) << "'\n";
+                keel::format_into(os, "   '{}'\n", charRow(r));
         }
         break;
     }
     case ValueType::STRING:
         if (isScalar()) {
-            os << "   \"" << toString() << "\"\n";
+            keel::format_into(os, "   \"{}\"\n", toString());
         } else {
             auto &d = dims();
-            os << "  " << d.rows() << "x" << d.cols() << " string array\n";
+            keel::format_into(os, "  {}x{} string array\n", d.rows(), d.cols());
             for (size_t i = 0; i < numel() && i < 20; ++i)
-                os << "    \"" << stringElem(i) << "\"\n";
+                keel::format_into(os, "    \"{}\"\n", stringElem(i));
         }
         break;
     case ValueType::LOGICAL: {
         if (isScalar()) {
-            os << "   " << (toBool() ? "1" : "0") << "\n";
+            keel::format_into(os, "   {}\n", toBool() ? "1" : "0");
         } else {
             auto &d = dims();
             for (size_t p = 0; p < d.pages(); ++p) {
                 if (d.is3D())
-                    os << "\n(:,:," << p + 1 << ") =\n\n";
+                    keel::format_into(os, "\n(:,:,{}) =\n\n", p + 1);
                 for (size_t r = 0; r < d.rows(); ++r) {
-                    os << "   ";
+                    os.append("   ");
                     for (size_t c = 0; c < d.cols(); ++c) {
                         size_t idx = d.is3D() ? (p * d.rows() * d.cols() + c * d.rows() + r)
                                               : d.sub2ind(r, c);
-                        os << " " << (logicalData()[idx] ? "1" : "0");
+                        os.append(logicalData()[idx] ? " 1" : " 0");
                     }
-                    os << "\n";
+                    os.push_back('\n');
                 }
             }
         }
@@ -5021,51 +5047,52 @@ std::string Value::formatDisplay(const std::string &name) const
     }
     case ValueType::COMPLEX: {
         if (isScalar()) {
-            os << "   " << fmtComplex(toComplex()) << "\n";
+            keel::format_into(os, "   {}\n", fmtComplex(toComplex()));
         } else {
             auto &d = dims();
-            // Pre-format for alignment
-            std::vector<std::vector<std::string>> cells(d.rows());
-            std::vector<size_t> colWidth(d.cols(), 0);
-            for (size_t r = 0; r < d.rows(); ++r) {
-                cells[r].resize(d.cols());
-                for (size_t c = 0; c < d.cols(); ++c) {
-                    cells[r][c] = fmtComplex(complexElem(r, c));
-                    colWidth[c] = std::max(colWidth[c], cells[r][c].size());
+            const size_t R = d.rows(), C = d.cols();
+            keel::Array<keel::String> cells(R * C);
+            keel::SmallArray<size_t, 32> colWidth(C, size_t{0});
+            for (size_t r = 0; r < R; ++r) {
+                for (size_t c = 0; c < C; ++c) {
+                    keel::String cell = fmtComplex(complexElem(r, c));
+                    colWidth[c] = keel::max(colWidth[c], cell.size());
+                    cells[r * C + c] = keel::move(cell);
                 }
             }
-            for (size_t r = 0; r < d.rows(); ++r) {
-                os << "   ";
-                for (size_t c = 0; c < d.cols(); ++c) {
-                    size_t pad = colWidth[c] > cells[r][c].size()
-                                     ? colWidth[c] - cells[r][c].size()
-                                     : 0; // guard unsigned underflow → huge pad loop
-                    for (size_t i = 0; i < pad + 1; ++i) os << ' ';
-                    os << cells[r][c];
+            for (size_t r = 0; r < R; ++r) {
+                os.append("   ");
+                for (size_t c = 0; c < C; ++c) {
+                    const keel::String &cell = cells[r * C + c];
+                    size_t pad = colWidth[c] > cell.size()
+                                     ? colWidth[c] - cell.size()
+                                     : 0;
+                    for (size_t i = 0; i < pad + 1; ++i) os.push_back(' ');
+                    os.append(cell);
                 }
-                os << "\n";
+                os.push_back('\n');
             }
         }
         break;
     }
     case ValueType::SINGLE: {
         if (isScalar()) {
-            os << "   " << static_cast<double>(*singleData()) << "\n";
+            keel::format_into(os, "   {}\n", fmtGeneral(static_cast<double>(*singleData())));
         } else if (isEmpty()) {
-            os << "     []\n";
+            os.append("     []\n");
         } else {
             auto &d = dims();
             const float *fd = singleData();
             for (size_t p = 0; p < d.pages(); ++p) {
                 if (d.is3D())
-                    os << "\n(:,:," << p + 1 << ") =\n\n";
+                    keel::format_into(os, "\n(:,:,{}) =\n\n", p + 1);
                 for (size_t r = 0; r < d.rows(); ++r) {
-                    os << "   ";
+                    os.append("   ");
                     for (size_t c = 0; c < d.cols(); ++c) {
                         size_t idx = d.is3D() ? d.sub2ind(r, c, p) : d.sub2ind(r, c);
-                        os << " " << static_cast<double>(fd[idx]);
+                        keel::format_into(os, " {}", fmtGeneral(static_cast<double>(fd[idx])));
                     }
-                    os << "\n";
+                    os.push_back('\n');
                 }
             }
         }
@@ -5080,16 +5107,16 @@ std::string Value::formatDisplay(const std::string &name) const
     case ValueType::UINT32:
     case ValueType::UINT64: {
         if (isScalar()) {
-            os << "   " << static_cast<int64_t>(toScalar()) << "\n";
+            keel::format_into(os, "   {}\n", static_cast<int64_t>(toScalar()));
         } else if (isEmpty()) {
-            os << "     []\n";
+            os.append("     []\n");
         } else {
             auto &d = dims();
             for (size_t p = 0; p < d.pages(); ++p) {
                 if (d.is3D())
-                    os << "\n(:,:," << p + 1 << ") =\n\n";
+                    keel::format_into(os, "\n(:,:,{}) =\n\n", p + 1);
                 for (size_t r = 0; r < d.rows(); ++r) {
-                    os << "   ";
+                    os.append("   ");
                     for (size_t c = 0; c < d.cols(); ++c) {
                         size_t idx = d.is3D() ? d.sub2ind(r, c, p) : d.sub2ind(r, c);
                         const void *raw = rawData();
@@ -5105,54 +5132,59 @@ std::string Value::formatDisplay(const std::string &name) const
                         case ValueType::UINT64: val = static_cast<int64_t>(static_cast<const uint64_t*>(raw)[idx]); break;
                         default: break;
                         }
-                        os << " " << val;
+                        keel::format_into(os, " {}", val);
                     }
-                    os << "\n";
+                    os.push_back('\n');
                 }
             }
         }
         break;
     }
-    case ValueType::STRUCT:
+    case ValueType::STRUCT: {
+        const auto names = fieldNamesInOrder();
         if (isStructArray()) {
             const auto &d = dims();
-            os << "  " << d.rows() << "x" << d.cols()
-               << " struct array with fields:\n\n";
+            keel::format_into(os, "  {}x{} struct array with fields:\n\n", d.rows(), d.cols());
             if (numel() > 0) {
-                for (auto &[k, v] : structArrayElem(0))
-                    os << "    " << k << "\n";
+                for (const auto &k : names)
+                    keel::format_into(os, "    {}\n", k);
             }
         } else {
-            os << "  struct with fields:\n\n";
-            // 1×1 struct array — element 0 holds the field map.
-            for (auto &[k, v] : structArrayElem(0))
-                os << "    " << k << ": " << v.debugString() << "\n";
+            os.append("  struct with fields:\n\n");
+            if (numel() > 0) {
+                const auto &m = structArrayElem(0);
+                for (const auto &k : names) {
+                    if (const Value *vp = m.get(k))
+                        keel::format_into(os, "    {}: {}\n", k, vp->debugString());
+                }
+            }
         }
         break;
+    }
     case ValueType::FUNC_HANDLE:
-        os << "   @" << funcHandleName() << "\n";
+        keel::format_into(os, "   @{}\n", funcHandleName());
         break;
     case ValueType::CELL: {
         auto &d = dims();
-        os << "  {" << d.rows() << "x" << d.cols();
-        if (d.is3D()) os << "x" << d.pages();
-        os << " cell}\n";
+        keel::format_into(os, "  {{{}x{}", d.rows(), d.cols());
+        if (d.is3D()) keel::format_into(os, "x{}", d.pages());
+        os.append(" cell}\n");
         for (size_t i = 0; i < numel() && i < 20; ++i)
-            os << "    {" << i + 1 << "}: " << cellAt(i).debugString() << "\n";
+            keel::format_into(os, "    {{{}}}: {}\n", i + 1, cellAt(i).debugString());
         if (numel() > 20)
-            os << "    ... (" << numel() - 20 << " more)\n";
+            keel::format_into(os, "    ... ({} more)\n", numel() - 20);
         break;
     }
     case ValueType::EMPTY:
-        os << "     []\n";
+        os.append("     []\n");
         break;
     default:
-        os << "   " << debugString() << "\n";
+        keel::format_into(os, "   {}\n", debugString());
         break;
     }
 
-    os << "\n";
-    return os.str();
+    os.push_back('\n');
+    return os;
 }
 
 } // namespace numkit

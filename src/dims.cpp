@@ -1,11 +1,11 @@
 // src/dims.cpp
 #include <numkit/value/dims.hpp>
 
+#include <keel/format.h>
 #include <keel/memory.h>
 
 #include <new>
 #include <stdexcept>
-#include <string>
 
 namespace numkit {
 
@@ -43,7 +43,7 @@ void Dims::setND(const keel::usize *dims, keel::i32 nd)
     if (nd < 1) nd = 1;
     if (nd > kMaxRank)
         throw std::runtime_error(
-            "Maximum array dimensionality (" + std::to_string(kMaxRank) + ") exceeded");
+            keel::format_fixed<96>("Maximum array dimensionality ({}) exceeded", kMaxRank).c_str());
     nd_ = static_cast<keel::u8>(nd);
     for (keel::i32 i = 0; i < kInlineCap; ++i)
         inline_[i] = (i < nd) ? dims[i] : 1;
@@ -118,9 +118,8 @@ Dims::~Dims()
 keel::usize Dims::sub2indChecked(keel::usize r, keel::usize c) const
 {
     if (r >= inline_[0] || c >= inline_[1])
-        throw std::runtime_error("Index (" + std::to_string(r + 1) + ","
-                                 + std::to_string(c + 1)
-                                 + ") exceeds dimensions");
+        throw std::runtime_error(
+            keel::format_fixed<96>("Index ({},{}) exceeds dimensions", r + 1, c + 1).c_str());
     return c * inline_[0] + r;
 }
 

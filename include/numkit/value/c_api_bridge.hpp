@@ -9,12 +9,12 @@
 #include <numkit/value/c_api.h>
 #include <numkit/value/value.hpp>
 
+#include <keel/memory.h>
 #include <keel/ref.h>
+#include <keel/small_array.h>
 
-#include <cstring>
 #include <exception>
 #include <stdexcept>
-#include <vector>
 
 namespace numkit::c_abi {
 
@@ -38,8 +38,11 @@ inline void setError(numkit_error *err, int code, const char *msg) noexcept
         err->message[0] = '\0';
         return;
     }
-    std::strncpy(err->message, msg, sizeof(err->message) - 1);
-    err->message[sizeof(err->message) - 1] = '\0';
+    const keel::StringRef sr(msg);
+    const keel::usize n = keel::min<keel::usize>(sr.size(), sizeof(err->message) - 1);
+    if (n > 0)
+        keel::mem_copy(err->message, sr.data(), n);
+    err->message[n] = '\0';
 }
 
 inline void invokeHostCallback(numkit_host_fn fn,
@@ -48,14 +51,15 @@ inline void invokeHostCallback(numkit_host_fn fn,
                                keel::usize nargout,
                                keel::MutArrayRef<Value> outs)
 {
-    std::vector<numkit_val *> boxedArgs;
+    keel::SmallArray<numkit_val *, 16> boxedArgs;
     boxedArgs.reserve(args.size());
     for (keel::usize i = 0; i < args.size(); ++i) {
         boxedArgs.push_back(boxValue(args[i]));
     }
 
-    keel::usize actualOut = outs.empty() ? 1 : outs.size();
-    std::vector<numkit_val *> rawOuts(actualOut, nullptr);
+    const keel::usize actualOut = outs.empty() ? 1 : outs.size();
+    keel::SmallArray<numkit_val *, 16> rawOuts;
+    rawOuts.assign(actualOut, nullptr);
     numkit_error cbErr{};
     clearError(&cbErr);
 
@@ -80,7 +84,7 @@ inline void invokeHostCallback(numkit_host_fn fn,
     for (keel::usize i = 0; i < rawOuts.size(); ++i) {
         if (rawOuts[i]) {
             if (i < outs.size()) {
-                outs[i] = std::move(unboxValueMut(rawOuts[i]));
+                outs[i] = keel::move(unboxValueMut(rawOuts[i]));
             }
             numkit_val_release(rawOuts[i]);
         }

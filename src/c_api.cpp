@@ -5,19 +5,21 @@
 #include <numkit/value/dims.hpp>
 #include <numkit/value/value_type.hpp>
 
-#include <algorithm>
+#include <keel/format.h>
+#include <keel/memory.h>
+#include <keel/string.h>
+
 #include <atomic>
-#include <cstring>
-#include <string>
+#include <new>
 
 struct numkit_val_s {
     numkit::Value val;
-    explicit numkit_val_s(numkit::Value v) : val(std::move(v)) {}
+    explicit numkit_val_s(numkit::Value v) noexcept : val(keel::move(v)) {}
 };
 
 namespace {
 
-std::atomic<int64_t> g_liveValues{0};
+std::atomic<keel::i64> g_liveValues{0};
 
 numkit::ValueType toValueType(numkit_dtype dt)
 {
@@ -72,22 +74,19 @@ numkit_dtype fromValueType(numkit::ValueType vt) noexcept
     }
 }
 
-size_t writeStrBuf(const std::string &s, char *buf, size_t bufCap) noexcept
+size_t writeStrBuf(keel::StringRef s, char *buf, size_t bufCap) noexcept
 {
     if (!buf || bufCap == 0) return s.size();
-    size_t n = std::min(s.size(), bufCap - 1);
-    if (n > 0) std::memcpy(buf, s.data(), n);
+    const size_t n = keel::min<size_t>(s.size(), bufCap - 1);
+    if (n > 0) keel::mem_copy(buf, s.data(), n);
     buf[n] = '\0';
     return s.size();
 }
 
-std::string extractStringValue(const numkit::Value &v)
+keel::String extractStringValue(const numkit::Value &v)
 {
     if (v.isString()) {
-        return v.numel() > 0 ? v.stringElem(0) : std::string{};
-    }
-    if (v.isChar()) {
-        return v.toString();
+        return v.numel() > 0 ? v.stringElem(0) : keel::String{};
     }
     return v.toString();
 }
@@ -98,7 +97,11 @@ namespace numkit::c_abi {
 
 numkit_val *boxValue(Value v)
 {
-    auto *p = new numkit_val_s(std::move(v));
+    keel::Allocator *a = keel::default_allocator();
+    void *mem = a->try_alloc_bytes(sizeof(numkit_val_s), alignof(numkit_val_s));
+    if (!mem)
+        throw std::bad_alloc();
+    auto *p = ::new (mem) numkit_val_s(keel::move(v));
     g_liveValues.fetch_add(1, std::memory_order_relaxed);
     return p;
 }
@@ -189,9 +192,9 @@ numkit_val *numkit_val_array_copy(const void *data,
             if (!data) {
                 throw std::invalid_argument("data pointer is null for non-empty array");
             }
-            std::memcpy(arr.rawDataMut(), data, bytes);
+            keel::mem_copy(arr.rawDataMut(), data, bytes);
         }
-        return boxValue(std::move(arr));
+        return boxValue(keel::move(arr));
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
         return nullptr;
@@ -238,7 +241,7 @@ numkit_val *numkit_val_alloc_array(numkit_dtype dtype,
         if (out_data_ptr) {
             *out_data_ptr = mutPtr;
         }
-        return boxValue(std::move(arr));
+        return boxValue(keel::move(arr));
     } catch (const std::exception &ex) {
         if (out_data_ptr) *out_data_ptr = nullptr;
         setError(err, 1, ex.what());
@@ -255,7 +258,9 @@ numkit_val *numkit_val_clone(const numkit_val *v)
 void numkit_val_release(numkit_val *v)
 {
     if (!v) return;
-    delete v;
+    keel::Allocator *a = keel::default_allocator();
+    v->~numkit_val_s();
+    a->free_bytes(v, sizeof(numkit_val_s), alignof(numkit_val_s));
     g_liveValues.fetch_sub(1, std::memory_order_relaxed);
 }
 
@@ -281,7 +286,7 @@ size_t numkit_val_dims(const numkit_val *v, size_t *out_dims, size_t max_dims)
     const Dims &d = v->val.dims();
     size_t nd = d.ndim();
     if (out_dims && max_dims > 0) {
-        size_t n = std::min(nd, max_dims);
+        size_t n = keel::min<size_t>(nd, max_dims);
         for (size_t i = 0; i < n; ++i) {
             out_dims[i] = d.dim(static_cast<int>(i));
         }
@@ -320,8 +325,8 @@ size_t numkit_val_copy_bytes(const numkit_val *v, void *dst, size_t max_bytes)
     const void *src = numkit_val_raw_data(v);
     if (!src) return 0;
     size_t avail = v->val.rawBytes();
-    size_t n = std::min(avail, max_bytes);
-    if (n > 0) std::memcpy(dst, src, n);
+    size_t n = keel::min<size_t>(avail, max_bytes);
+    if (n > 0) keel::mem_copy(dst, src, n);
     return n;
 }
 
@@ -516,11 +521,12 @@ numkit_val *numkit_struct_get(const numkit_val *s,
                 throw std::out_of_range("Struct array index out of bounds");
             }
             const auto &m = s->val.structArrayElem(linear_idx);
-            auto it = m.find(field);
-            if (it == m.end()) {
-                throw std::runtime_error(std::string("Non-existent field '") + field + "'");
+            const Value *vp = m.get(keel::StringRef(field));
+            if (!vp) {
+                throw std::runtime_error(
+                    keel::format_small<128>("Non-existent field '{}'", field).c_str());
             }
-            return boxValue(it->second);
+            return boxValue(*vp);
         }
         if (linear_idx != 0) {
             throw std::out_of_range("Struct index out of bounds");

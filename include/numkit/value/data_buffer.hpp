@@ -54,7 +54,11 @@ public:
     /// Non-owning ctor: wraps `external` for `bytes` bytes. Destructor
     /// will not free; caller manages lifetime.
     DataBuffer(ViewTag, void *external, keel::usize bytes) noexcept;
-    ~DataBuffer();
+    ~DataBuffer() noexcept;
+
+    static DataBuffer *create(keel::usize bytes, keel::Allocator *alloc = nullptr);
+    static DataBuffer *createView(void *external, keel::usize bytes);
+    static void destroy(DataBuffer *buf) noexcept;
 
     DataBuffer(const DataBuffer &) = delete;
     DataBuffer &operator=(const DataBuffer &) = delete;

@@ -7,12 +7,13 @@
 
 #include <cassert>
 #include <cmath>
-#include <sstream>
-#include <string>
-#include <string_view>
+#include <initializer_list>
 
+#include <keel/format.h>
 #include <keel/math.h>
+#include <keel/number.h>
 #include <keel/ref.h>
+#include <keel/string.h>
 
 #include <numkit/value/error.hpp>
 #include <numkit/value/index.hpp>
@@ -23,33 +24,32 @@ namespace numkit::argcheck {
 
 namespace detail {
 
-[[noreturn]] inline void fail(const std::string &msg, std::string_view fn,
-                              const std::string &id)
+[[noreturn]] inline void fail(keel::StringRef msg, keel::StringRef fn,
+                              keel::StringRef id)
 {
-    throw Error(msg, 0, 0, std::string(fn), "", id);
+    throw Error(msg, 0, 0, fn, "", id);
 }
 
 // Value rendering for got-clauses: "2.5", "-5", "1e+30", "Inf", "NaN".
-inline std::string num(keel::f64 v)
+inline keel::FixedString<64> num(keel::f64 v) noexcept
 {
     if (keel::is_nan(v))
-        return "NaN";
+        return keel::FixedString<64>("NaN");
     if (keel::is_inf(v))
-        return v > 0 ? "Inf" : "-Inf";
-    std::ostringstream os;
-    os << v;
-    return os.str();
+        return keel::FixedString<64>(v > 0 ? "Inf" : "-Inf");
+    keel::FixedString<64> out;
+    const keel::usize len = keel::format_f64_general(out.inline_buffer(), 63, v, 6, false);
+    out.set_inline_size(len);
+    return out;
 }
 
 // Shape rendering for got-clauses: "1x2", "2x3x4", "0x0".
-inline std::string dimsStr(const Value &v)
+inline keel::SmallString<64> dimsStr(const Value &v)
 {
     const Dims &d = v.dims();
-    std::string s = std::to_string(d.dim(0));
-    for (keel::i32 k = 1; k < d.ndim(); ++k) {
-        s += "x";
-        s += std::to_string(d.dim(k));
-    }
+    keel::SmallString<64> s = keel::format_small<64>("{}", d.dim(0));
+    for (keel::i32 k = 1; k < d.ndim(); ++k)
+        keel::format_into(s, "x{}", d.dim(k));
     return s;
 }
 
@@ -58,24 +58,24 @@ inline std::string dimsStr(const Value &v)
 // ============================================================
 // Arity.
 // ============================================================
-inline void checkNargin(keel::usize actual, keel::usize minArgs, std::string_view fn)
+inline void checkNargin(keel::usize actual, keel::usize minArgs, keel::StringRef fn)
 {
     if (actual < minArgs)
-        detail::fail(std::string(fn) + ": not enough input arguments — at "
-                     "least " + std::to_string(minArgs) + " required (got "
-                         + std::to_string(actual) + ").",
-                     fn, "numkit:" + std::string(fn) + ":nargin");
+        detail::fail(keel::format_small<192>(
+                         "{}: not enough input arguments — at least {} required (got {}).",
+                         fn, minArgs, actual),
+                     fn, keel::format_small<96>("numkit:{}:nargin", fn));
 }
 
 inline void checkNargin(keel::usize actual, keel::usize minArgs, keel::usize maxArgs,
-                        std::string_view fn)
+                        keel::StringRef fn)
 {
     checkNargin(actual, minArgs, fn);
     if (actual > maxArgs)
-        detail::fail(std::string(fn) + ": too many input arguments — at "
-                     "most " + std::to_string(maxArgs) + " accepted (got "
-                         + std::to_string(actual) + ").",
-                     fn, "numkit:" + std::string(fn) + ":maxnargin");
+        detail::fail(keel::format_small<192>(
+                         "{}: too many input arguments — at most {} accepted (got {}).",
+                         fn, maxArgs, actual),
+                     fn, keel::format_small<96>("numkit:{}:maxnargin", fn));
 }
 
 // ============================================================
@@ -83,40 +83,42 @@ inline void checkNargin(keel::usize actual, keel::usize minArgs, keel::usize max
 // rand/randn/randi/strings).
 // ============================================================
 
-inline keel::usize arrayDim(keel::f64 d, std::string_view fn)
+inline keel::usize arrayDim(keel::f64 d, keel::StringRef fn)
 {
     if (keel::is_nan(d) || keel::is_inf(d))
-        detail::fail(std::string(fn) + ": size inputs must be finite (got "
-                     + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":sizeNotFinite");
+        detail::fail(keel::format_small<192>(
+                         "{}: size inputs must be finite (got {}).", fn, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:sizeNotFinite", fn));
     if (d != std::floor(d))
-        detail::fail(std::string(fn) + ": size inputs must be integers "
-                     "(got " + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":sizeNotInteger");
+        detail::fail(keel::format_small<192>(
+                         "{}: size inputs must be integers (got {}).", fn, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:sizeNotInteger", fn));
     if (d < 0.0)
         return 0;
     keel::usize out = 0;
     if (!tryNonNegSize(d, out))
-        detail::fail(std::string(fn) + ": requested array size exceeds the "
-                     "supported maximum (got " + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":sizeTooLarge");
+        detail::fail(keel::format_small<192>(
+                         "{}: requested array size exceeds the supported maximum (got {}).",
+                         fn, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:sizeTooLarge", fn));
     return out;
 }
 
-inline void arrayDimReal(const Value &v, std::string_view fn)
+inline void arrayDimReal(const Value &v, keel::StringRef fn)
 {
     if (v.isComplex())
-        detail::fail(std::string(fn) + ": size inputs must be real "
-                     "(argument is complex).",
-                     fn, "numkit:" + std::string(fn) + ":sizeNotReal");
+        detail::fail(keel::format_small<192>(
+                         "{}: size inputs must be real (argument is complex).", fn),
+                     fn, keel::format_small<96>("numkit:{}:sizeNotReal", fn));
 }
 
-inline keel::usize arrayDim(const Value &v, std::string_view fn)
+inline keel::usize arrayDim(const Value &v, keel::StringRef fn)
 {
     if (!v.isScalar())
-        detail::fail(std::string(fn) + ": size inputs must be scalars "
-                     "(argument is " + detail::dimsStr(v) + ").",
-                     fn, "numkit:" + std::string(fn) + ":sizeNotScalar");
+        detail::fail(keel::format_small<192>(
+                         "{}: size inputs must be scalars (argument is {}).",
+                         fn, detail::dimsStr(v)),
+                     fn, keel::format_small<96>("numkit:{}:sizeNotScalar", fn));
     arrayDimReal(v, fn);
     return arrayDim(v.toScalar(), fn);
 }
@@ -125,39 +127,41 @@ inline keel::usize arrayDim(const Value &v, std::string_view fn)
 // reshape size inputs.
 // ============================================================
 
-inline void reshapeSizeReal(const Value &v, std::string_view fn)
+inline void reshapeSizeReal(const Value &v, keel::StringRef fn)
 {
     if (v.isComplex())
-        detail::fail(std::string(fn) + ": size inputs must be real "
-                     "(argument is complex).",
-                     fn, "numkit:" + std::string(fn) + ":sizeNotReal");
+        detail::fail(keel::format_small<192>(
+                         "{}: size inputs must be real (argument is complex).", fn),
+                     fn, keel::format_small<96>("numkit:{}:sizeNotReal", fn));
 }
 
-inline keel::f64 reshapeSizeArg(const Value &v, std::string_view fn)
+inline keel::f64 reshapeSizeArg(const Value &v, keel::StringRef fn)
 {
     if (!v.isScalar())
-        detail::fail(std::string(fn) + ": size inputs must be scalars "
-                     "(argument is " + detail::dimsStr(v) + ").",
-                     fn, "numkit:" + std::string(fn) + ":sizeNotScalar");
+        detail::fail(keel::format_small<192>(
+                         "{}: size inputs must be scalars (argument is {}).",
+                         fn, detail::dimsStr(v)),
+                     fn, keel::format_small<96>("numkit:{}:sizeNotScalar", fn));
     reshapeSizeReal(v, fn);
     return v.toScalar();
 }
 
-inline keel::usize reshapeSize(keel::f64 d, std::string_view fn)
+inline keel::usize reshapeSize(keel::f64 d, keel::StringRef fn)
 {
     if (d < 0.0)
-        detail::fail(std::string(fn) + ": size inputs must be non-negative "
-                     "(got " + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":sizeNegative");
+        detail::fail(keel::format_small<192>(
+                         "{}: size inputs must be non-negative (got {}).", fn, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:sizeNegative", fn));
     if (keel::is_nan(d) || keel::is_inf(d) || d != std::floor(d))
-        detail::fail(std::string(fn) + ": size inputs must be real "
-                     "integers (got " + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":sizeNotInteger");
+        detail::fail(keel::format_small<192>(
+                         "{}: size inputs must be real integers (got {}).", fn, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:sizeNotInteger", fn));
     keel::usize out = 0;
     if (!tryNonNegSize(d, out))
-        detail::fail(std::string(fn) + ": requested array size exceeds the "
-                     "supported maximum (got " + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":sizeTooLarge");
+        detail::fail(keel::format_small<192>(
+                         "{}: requested array size exceeds the supported maximum (got {}).",
+                         fn, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:sizeTooLarge", fn));
     return out;
 }
 
@@ -166,69 +170,69 @@ inline keel::usize reshapeSize(keel::f64 d, std::string_view fn)
 // ============================================================
 
 inline keel::f64 expectedReal(const Value &v, keel::i32 argNum,
-                              std::string_view argName, std::string_view fn)
+                              keel::StringRef argName, keel::StringRef fn)
 {
-    const std::string id = "numkit:" + std::string(fn) + ":"
-                           + std::string(argName);
     if (!v.isScalar())
-        detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                         + " (" + std::string(argName) + ") must be a "
-                         "scalar (argument is " + detail::dimsStr(v) + ").",
-                     fn, id + "NotScalar");
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) must be a scalar (argument is {}).",
+                         fn, argNum, argName, detail::dimsStr(v)),
+                     fn, keel::format_small<96>("numkit:{}:{}NotScalar", fn, argName));
     if (v.isComplex())
-        detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                         + " (" + std::string(argName) + ") must be real "
-                         "(argument is complex).",
-                     fn, id + "NotReal");
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) must be real (argument is complex).",
+                         fn, argNum, argName),
+                     fn, keel::format_small<96>("numkit:{}:{}NotReal", fn, argName));
     return v.toScalar();
 }
 
-inline void expectedPositive(keel::f64 v, keel::i32 argNum, std::string_view argName,
-                             std::string_view fn)
+inline void expectedPositive(keel::f64 v, keel::i32 argNum, keel::StringRef argName,
+                             keel::StringRef fn)
 {
     if (!(v > 0.0))
-        detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                         + " (" + std::string(argName) + ") must be "
-                         "positive (got " + detail::num(v) + ").",
-                     fn, "numkit:" + std::string(fn) + ":"
-                         + std::string(argName) + "NotPositive");
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) must be positive (got {}).",
+                         fn, argNum, argName, detail::num(v)),
+                     fn, keel::format_small<96>("numkit:{}:{}NotPositive", fn, argName));
 }
 
 // ============================================================
 // Dimension arguments.
 // ============================================================
 
-inline keel::i32 dimArg(keel::f64 d, std::string_view fn)
+inline keel::i32 dimArg(keel::f64 d, keel::StringRef fn)
 {
     if (keel::is_nan(d) || keel::is_inf(d))
-        detail::fail(std::string(fn) + ": dimension argument must be finite "
-                     "(got " + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":dimNotFinite");
+        detail::fail(keel::format_small<192>(
+                         "{}: dimension argument must be finite (got {}).", fn, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:dimNotFinite", fn));
     if (d != std::floor(d))
-        detail::fail(std::string(fn) + ": dimension argument must be an "
-                     "integer (got " + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":dimNotInteger");
+        detail::fail(keel::format_small<192>(
+                         "{}: dimension argument must be an integer (got {}).", fn, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:dimNotInteger", fn));
     if (d < 1.0)
-        detail::fail(std::string(fn) + ": dimension argument must be a "
-                     "positive integer (got " + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":dimNotPositive");
+        detail::fail(keel::format_small<192>(
+                         "{}: dimension argument must be a positive integer (got {}).",
+                         fn, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:dimNotPositive", fn));
     if (d > static_cast<keel::f64>(keel::Limits<keel::i32>::kMax))
-        detail::fail(std::string(fn) + ": dimension argument exceeds maximum "
-                     "supported rank (got " + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":dimTooLarge");
+        detail::fail(keel::format_small<192>(
+                         "{}: dimension argument exceeds maximum supported rank (got {}).",
+                         fn, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:dimTooLarge", fn));
     return static_cast<keel::i32>(d);
 }
 
-inline keel::i32 dimArg(const Value &v, std::string_view fn)
+inline keel::i32 dimArg(const Value &v, keel::StringRef fn)
 {
     if (!v.isScalar())
-        detail::fail(std::string(fn) + ": dimension argument must be a "
-                     "scalar (argument is " + detail::dimsStr(v) + ").",
-                     fn, "numkit:" + std::string(fn) + ":dimNotScalar");
+        detail::fail(keel::format_small<192>(
+                         "{}: dimension argument must be a scalar (argument is {}).",
+                         fn, detail::dimsStr(v)),
+                     fn, keel::format_small<96>("numkit:{}:dimNotScalar", fn));
     if (v.isComplex())
-        detail::fail(std::string(fn) + ": dimension argument must be real "
-                     "(argument is complex).",
-                     fn, "numkit:" + std::string(fn) + ":dimNotReal");
+        detail::fail(keel::format_small<192>(
+                         "{}: dimension argument must be real (argument is complex).", fn),
+                     fn, keel::format_small<96>("numkit:{}:dimNotReal", fn));
     return dimArg(v.toScalar(), fn);
 }
 
@@ -236,51 +240,47 @@ inline keel::i32 dimArg(const Value &v, std::string_view fn)
 // Named integer-valued scalar inputs and 0/1 flags.
 // ============================================================
 
-inline keel::i32 expectedInteger(keel::f64 v, keel::i32 argNum, std::string_view argName,
-                                 std::string_view fn)
+inline keel::i32 expectedInteger(keel::f64 v, keel::i32 argNum, keel::StringRef argName,
+                                 keel::StringRef fn)
 {
     if (keel::is_nan(v) || keel::is_inf(v) || v != std::floor(v))
-        detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                         + " (" + std::string(argName) + ") must be an "
-                         "integer (got " + detail::num(v) + ").",
-                     fn, "numkit:" + std::string(fn) + ":"
-                         + std::string(argName) + "NotInteger");
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) must be an integer (got {}).",
+                         fn, argNum, argName, detail::num(v)),
+                     fn, keel::format_small<96>("numkit:{}:{}NotInteger", fn, argName));
     if (v < static_cast<keel::f64>(keel::Limits<keel::i32>::kMin)
         || v > static_cast<keel::f64>(keel::Limits<keel::i32>::kMax))
-        detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                         + " (" + std::string(argName) + ") exceeds integer "
-                         "range (got " + detail::num(v) + ").",
-                     fn, "numkit:" + std::string(fn) + ":"
-                         + std::string(argName) + "OutOfRange");
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) exceeds integer range (got {}).",
+                         fn, argNum, argName, detail::num(v)),
+                     fn, keel::format_small<96>("numkit:{}:{}OutOfRange", fn, argName));
     return static_cast<keel::i32>(v);
 }
 
-inline void expectedNonNegative(keel::f64 v, keel::i32 argNum, std::string_view argName,
-                                std::string_view fn)
+inline void expectedNonNegative(keel::f64 v, keel::i32 argNum, keel::StringRef argName,
+                                keel::StringRef fn)
 {
     if (v < 0.0)
-        detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                         + " (" + std::string(argName) + ") must be "
-                         "non-negative (got " + detail::num(v) + ").",
-                     fn, "numkit:" + std::string(fn) + ":"
-                         + std::string(argName) + "NotNegative");
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) must be non-negative (got {}).",
+                         fn, argNum, argName, detail::num(v)),
+                     fn, keel::format_small<96>("numkit:{}:{}NotNegative", fn, argName));
 }
 
-inline void expectedFlag01(keel::f64 v, keel::i32 argNum, std::string_view argName,
-                           std::string_view fn)
+inline void expectedFlag01(keel::f64 v, keel::i32 argNum, keel::StringRef argName,
+                           keel::StringRef fn)
 {
     expectedInteger(v, argNum, argName, fn);
     if (v != 0.0 && v != 1.0)
-        detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                         + " (" + std::string(argName) + ") must be "
-                         "0 or 1 (got " + detail::num(v) + ").",
-                     fn, "numkit:" + std::string(fn) + ":"
-                         + std::string(argName) + "Not01");
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) must be 0 or 1 (got {}).",
+                         fn, argNum, argName, detail::num(v)),
+                     fn, keel::format_small<96>("numkit:{}:{}Not01", fn, argName));
 }
 
 inline keel::i32 expectedPositiveInteger(keel::f64 v, keel::i32 argNum,
-                                         std::string_view argName,
-                                         std::string_view fn)
+                                         keel::StringRef argName,
+                                         keel::StringRef fn)
 {
     const keel::i32 i = expectedInteger(v, argNum, argName, fn);
     expectedPositive(v, argNum, argName, fn);
@@ -288,49 +288,45 @@ inline keel::i32 expectedPositiveInteger(keel::f64 v, keel::i32 argNum,
 }
 
 inline void expectedBetween(keel::f64 v, keel::f64 lo, keel::f64 hi, keel::i32 argNum,
-                            std::string_view argName, std::string_view fn)
+                            keel::StringRef argName, keel::StringRef fn)
 {
     if (!(v >= lo && v <= hi))
-        detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                         + " (" + std::string(argName) + ") must be between "
-                         + detail::num(lo) + " and " + detail::num(hi)
-                         + " inclusive (got " + detail::num(v) + ").",
-                     fn, "numkit:" + std::string(fn) + ":"
-                         + std::string(argName) + "OutOfRange");
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) must be between {} and {} inclusive (got {}).",
+                         fn, argNum, argName, detail::num(lo), detail::num(hi), detail::num(v)),
+                     fn, keel::format_small<96>("numkit:{}:{}OutOfRange", fn, argName));
 }
 
 inline keel::i32 expectedOneOf(keel::f64 v, std::initializer_list<keel::f64> choices,
-                               keel::i32 argNum, std::string_view argName,
-                               std::string_view fn)
+                               keel::i32 argNum, keel::StringRef argName,
+                               keel::StringRef fn)
 {
     expectedInteger(v, argNum, argName, fn);
     for (keel::f64 c : choices)
         if (v == c)
             return static_cast<keel::i32>(v);
-    std::string list;
+    keel::SmallString<128> list;
     for (keel::f64 c : choices) {
         if (!list.empty())
-            list += ", ";
-        list += detail::num(c);
+            list.append(", ");
+        list.append(detail::num(c));
     }
-    detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                     + " (" + std::string(argName) + ") must be one of: "
-                     + list + " (got " + detail::num(v) + ").",
-                 fn, "numkit:" + std::string(fn) + ":"
-                     + std::string(argName) + "NotChoice");
+    detail::fail(keel::format_small<192>(
+                     "{}: input {} ({}) must be one of: {} (got {}).",
+                     fn, argNum, argName, list, detail::num(v)),
+                 fn, keel::format_small<96>("numkit:{}:{}NotChoice", fn, argName));
 }
 
-inline keel::usize roundLength(const Value &v, keel::i32 argNum, std::string_view argName,
-                               std::string_view fn)
+inline keel::usize roundLength(const Value &v, keel::i32 argNum, keel::StringRef argName,
+                               keel::StringRef fn)
 {
     const keel::f64 d = expectedReal(v, argNum, argName, fn);
     const keel::f64 r = std::floor(d + 0.5);
     if (!(r >= 0.0))
-        detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                         + " (" + std::string(argName) + ") must be "
-                         "non-negative (got " + detail::num(d) + ").",
-                     fn, "numkit:" + std::string(fn) + ":"
-                         + std::string(argName) + "NotNegative");
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) must be non-negative (got {}).",
+                         fn, argNum, argName, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:{}NotNegative", fn, argName));
     return static_cast<keel::usize>(r);
 }
 
@@ -338,80 +334,62 @@ inline keel::usize roundLength(const Value &v, keel::i32 argNum, std::string_vie
 // String-valued option inputs: one of a fixed choice set.
 // ============================================================
 inline keel::usize expectedChoice(const Value &v,
-                                  std::initializer_list<std::string_view> choices,
-                                  keel::i32 argNum, std::string_view argName,
-                                  std::string_view fn)
+                                  std::initializer_list<keel::StringRef> choices,
+                                  keel::i32 argNum, keel::StringRef argName,
+                                  keel::StringRef fn)
 {
-    auto describe = [&]() -> std::string {
+    auto describe = [&]() -> keel::SmallString<96> {
         if (v.isChar() || v.isString())
-            return "got '" + v.toString() + "'";
+            return keel::format_small<96>("got '{}'", v.toString());
         if (v.isScalar() && !v.isComplex())
-            return "got " + detail::num(v.toScalar());
-        return "argument is " + detail::dimsStr(v);
+            return keel::format_small<96>("got {}", detail::num(v.toScalar()));
+        return keel::format_small<96>("argument is {}", detail::dimsStr(v));
     };
     if (v.isChar() || v.isString()) {
-        std::string s = v.toString();
+        keel::String s = v.toString();
         for (char &c : s)
             c = keel::detail::to_ascii_lower(c);
+        const keel::StringRef sr = s.as_ref();
         keel::usize idx = 0;
-        for (std::string_view c : choices) {
-            if (s == c)
+        for (keel::StringRef c : choices) {
+            if (sr == c)
                 return idx;
             ++idx;
         }
     }
-    std::string list;
-    for (std::string_view c : choices) {
+    keel::SmallString<128> list;
+    for (keel::StringRef c : choices) {
         if (!list.empty())
-            list += ", ";
-        list += "'";
-        list += c;
-        list += "'";
+            list.append(", ");
+        list.push_back('\'');
+        list.append(c);
+        list.push_back('\'');
     }
-    detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
-                     + " (" + std::string(argName) + ") must be one of: "
-                     + list + " (" + describe() + ").",
-                 fn, "numkit:" + std::string(fn) + ":"
-                     + std::string(argName) + "NotChoice");
+    detail::fail(keel::format_small<256>(
+                     "{}: input {} ({}) must be one of: {} ({}).",
+                     fn, argNum, argName, list, describe()),
+                 fn, keel::format_small<96>("numkit:{}:{}NotChoice", fn, argName));
 }
 
 // ============================================================
 // String choice — prefix-matching semantics.
 // Return codes: >=0 matched index; -1 no match; -2 ambiguous prefix.
 // ============================================================
+template <typename Str = keel::StringRef>
+    requires keel::IsConvertible<const Str &, keel::StringRef>
 inline keel::i32 matchStringChoice(const Value &name,
-                                   keel::ArrayRef<std::string_view> choices)
+                                   keel::ArrayRef<Str> choices)
 {
-    std::string s = name.toString();
+    keel::String s = name.toString();
     for (char &c : s)
         c = keel::detail::to_ascii_lower(c);
+    const keel::StringRef sr = s.as_ref();
     for (keel::usize i = 0; i < choices.size(); ++i)
-        if (s == choices[i])
+        if (keel::StringRef(choices[i]) == sr)
             return static_cast<keel::i32>(i);
     keel::i32 hit = -1;
     for (keel::usize i = 0; i < choices.size(); ++i) {
-        if (choices[i].rfind(s, 0) == 0) {
-            if (hit >= 0)
-                return -2;
-            hit = static_cast<keel::i32>(i);
-        }
-    }
-    return hit;
-}
-
-inline keel::i32 matchStringChoice(const Value &name,
-                                   keel::ArrayRef<keel::StringRef> choices)
-{
-    std::string s = name.toString();
-    for (char &c : s)
-        c = keel::detail::to_ascii_lower(c);
-    const keel::StringRef sr(s);
-    for (keel::usize i = 0; i < choices.size(); ++i)
-        if (choices[i] == sr)
-            return static_cast<keel::i32>(i);
-    keel::i32 hit = -1;
-    for (keel::usize i = 0; i < choices.size(); ++i) {
-        if (choices[i].starts_with(sr)) {
+        if (keel::StringRef(choices[i]).starts_with(sr)) {
             if (hit >= 0)
                 return -2;
             hit = static_cast<keel::i32>(i);
@@ -474,88 +452,64 @@ inline Class classBitOf(ValueType t)
 }
 
 struct RejectionVoice {
-    std::string_view notAccepted = "invalidType";
-    std::string_view complexRejected = "expectedReal";
-    std::string_view singleRejected = "";
+    keel::StringRef notAccepted = "invalidType";
+    keel::StringRef complexRejected = "expectedReal";
+    keel::StringRef singleRejected = "";
 };
 
 inline void requireClassSet(const Value &x, ClassMask accept,
-                            std::string_view fn,
-                            std::string_view argName = "A",
+                            keel::StringRef fn,
+                            keel::StringRef argName = "A",
                             const RejectionVoice &voice = {})
 {
     assert(static_cast<keel::u32>(accept) != 0 && "empty class mask");
     const Class c = classBitOf(x.type());
     if (maskAccepts(accept, c))
         return;
-    const std::string got = mtypeName(x.type());
+    const char *got = mtypeName(x.type());
     if (c == ClsCpx && !voice.complexRejected.empty())
-        detail::fail(std::string(fn) + ": " + std::string(argName)
-                     + " must be real (got a complex array).",
-                     fn, "numkit:" + std::string(fn) + ":"
-                         + std::string(voice.complexRejected));
+        detail::fail(keel::format_small<192>(
+                         "{}: {} must be real (got a complex array).", fn, argName),
+                     fn, keel::format_small<96>("numkit:{}:{}", fn, voice.complexRejected));
     if (c == ClsSgl && maskAccepts(accept, ClsDbl)
         && !voice.singleRejected.empty())
-        detail::fail(std::string(fn) + ": " + std::string(argName)
-                     + " is not supported in single precision in this "
-                       "revision (pass a double array; got "
-                     + got + ").",
-                     fn, "numkit:" + std::string(fn) + ":"
-                         + std::string(voice.singleRejected));
-    detail::fail(std::string(fn) + ": " + std::string(argName)
-                 + " has an unsupported class for this function (got "
-                 + got + ").",
-                 fn, "numkit:" + std::string(fn) + ":"
-                     + std::string(voice.notAccepted));
+        detail::fail(keel::format_small<256>(
+                         "{}: {} is not supported in single precision in this revision "
+                         "(pass a double array; got {}).",
+                         fn, argName, got),
+                     fn, keel::format_small<96>("numkit:{}:{}", fn, voice.singleRejected));
+    detail::fail(keel::format_small<192>(
+                     "{}: {} has an unsupported class for this function (got {}).",
+                     fn, argName, got),
+                 fn, keel::format_small<96>("numkit:{}:{}", fn, voice.notAccepted));
 }
 
 // ============================================================
 // Name-value tail walker.
 // ============================================================
-template <typename F>
+template <typename Str = keel::StringRef, typename F>
+    requires keel::IsConvertible<const Str &, keel::StringRef>
 void forEachNvPair(keel::ArrayRef<Value> in, keel::usize start,
-                   keel::ArrayRef<std::string_view> names,
-                   std::string_view fn, std::string_view tag, F &&dispatch)
+                   keel::ArrayRef<Str> names,
+                   keel::StringRef fn, keel::StringRef tag, F &&dispatch)
 {
     if ((in.size() - start) % 2 != 0)
-        detail::fail(std::string(fn) + ": each parameter name needs a "
-                     "value (unmatched value in the name-value list).",
-                     fn, "numkit:" + std::string(fn) + ":nvMismatch");
+        detail::fail(keel::format_small<192>(
+                         "{}: each parameter name needs a value (unmatched value in the name-value list).",
+                         fn),
+                     fn, keel::format_small<96>("numkit:{}:nvMismatch", fn));
     for (keel::usize i = start; i + 1 < in.size(); i += 2) {
         const Value &name = in[i];
         if (!(name.isChar() || name.isString()))
-            detail::fail(std::string(fn) + ": expected a parameter name "
-                         "(unmatched value in the name-value list).",
-                         fn, "numkit:" + std::string(fn) + ":nvMismatch");
+            detail::fail(keel::format_small<192>(
+                             "{}: expected a parameter name (unmatched value in the name-value list).",
+                             fn),
+                         fn, keel::format_small<96>("numkit:{}:nvMismatch", fn));
         const keel::i32 hit = matchStringChoice(name, names);
         if (hit < 0)
-            detail::fail(std::string(fn) + ": unrecognized parameter "
-                         "name '" + name.toString() + "'.",
-                         fn, std::string(tag));
-        dispatch(static_cast<keel::usize>(hit), in[i + 1]);
-    }
-}
-
-template <typename F>
-void forEachNvPair(keel::ArrayRef<Value> in, keel::usize start,
-                   keel::ArrayRef<keel::StringRef> names,
-                   std::string_view fn, std::string_view tag, F &&dispatch)
-{
-    if ((in.size() - start) % 2 != 0)
-        detail::fail(std::string(fn) + ": each parameter name needs a "
-                     "value (unmatched value in the name-value list).",
-                     fn, "numkit:" + std::string(fn) + ":nvMismatch");
-    for (keel::usize i = start; i + 1 < in.size(); i += 2) {
-        const Value &name = in[i];
-        if (!(name.isChar() || name.isString()))
-            detail::fail(std::string(fn) + ": expected a parameter name "
-                         "(unmatched value in the name-value list).",
-                         fn, "numkit:" + std::string(fn) + ":nvMismatch");
-        const keel::i32 hit = matchStringChoice(name, names);
-        if (hit < 0)
-            detail::fail(std::string(fn) + ": unrecognized parameter "
-                         "name '" + name.toString() + "'.",
-                         fn, std::string(tag));
+            detail::fail(keel::format_small<192>(
+                             "{}: unrecognized parameter name '{}'.", fn, name.toString()),
+                         fn, tag);
         dispatch(static_cast<keel::usize>(hit), in[i + 1]);
     }
 }
