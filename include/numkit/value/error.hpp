@@ -1,34 +1,26 @@
-// value/include/numkit/value/error.hpp
+// include/numkit/value/error.hpp
 //
 // numkit::Error — the runtime error type carrying an optional source
-// location (line/col/function/context) and a MATLAB-style identifier.
-//
-// An L0 type: it depends only on the C++ standard library, so every layer —
-// value, ops, the toolboxes, and core — can throw and catch it. (It used to
-// live in core/types.hpp; moving it down lets the foundation/toolboxes report
-// errors without pulling in the engine.) types.hpp re-includes this header so
-// existing `numkit::Error` users are unaffected.
-
+// location (line/col/function/context) and a diagnostic identifier.
 #pragma once
+
+#include <keel/core.h>
 
 #include <stdexcept>
 #include <string>
 
 namespace numkit {
 
-// ============================================================
-// Runtime error with source location
-// ============================================================
 class Error : public std::runtime_error
 {
 public:
     Error(const std::string &msg,
-              int line = 0,
-              int col = 0,
-              const std::string &funcName = "",
-              const std::string &context = "",
-              const std::string &identifier = "")
-        : std::runtime_error(msg) // what() = raw message (clean, for try/catch)
+          keel::i32 line = 0,
+          keel::i32 col = 0,
+          const std::string &funcName = "",
+          const std::string &context = "",
+          const std::string &identifier = "")
+        : std::runtime_error(msg)
         , line_(line)
         , col_(col)
         , funcName_(funcName)
@@ -36,19 +28,14 @@ public:
         , identifier_(identifier)
     {}
 
-    int line() const { return line_; }
-    int col() const { return col_; }
-    const std::string &funcName() const { return funcName_; }
-    const std::string &context() const { return context_; }
-    const std::string &identifier() const { return identifier_; }
+    keel::i32 line() const noexcept { return line_; }
+    keel::i32 col() const noexcept { return col_; }
+    const std::string &funcName() const noexcept { return funcName_; }
+    const std::string &context() const noexcept { return context_; }
+    const std::string &identifier() const noexcept { return identifier_; }
 
-    // Fill in source-location fields only if they are currently empty.
-    // Called by outer catch blocks (TreeWalker::execNode, VM::dispatchLoop)
-    // to enrich errors thrown deeper in the call stack (e.g. from public
-    // C++ library APIs that don't know their source line) without
-    // overwriting more-precise location already attached by the thrower.
-    void attachIfMissing(int line,
-                         int col,
+    void attachIfMissing(keel::i32 line,
+                         keel::i32 col,
                          const std::string &funcName = "",
                          const std::string &context = "")
     {
@@ -62,7 +49,6 @@ public:
             context_ = context;
     }
 
-    // Formatted for user display: "Error at line 15, column 3:\n  msg (in call to 'sin')"
     std::string formattedWhat() const
     {
         if (line_ <= 0)
@@ -80,11 +66,11 @@ public:
     }
 
 private:
-    int line_;
-    int col_;
+    keel::i32 line_;
+    keel::i32 col_;
     std::string funcName_;
-    std::string context_;    // e.g. "in call to 'sin'"
-    std::string identifier_; // e.g. "numkit:badInput"
+    std::string context_;
+    std::string identifier_;
 };
 
 } // namespace numkit

@@ -8,6 +8,33 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(NUMKIT_BUILD_TESTS "Build GoogleTest suite" OFF)
 option(NUMKIT_VALUE_BUILD_TESTS "Build C-ABI GoogleTest suite for numkit/value" ${NUMKIT_BUILD_TESTS})
 
+if(NOT TARGET keel::keel)
+    find_package(keel QUIET CONFIG)
+    if(NOT TARGET keel::keel)
+        if(NOT DEFINED FETCHCONTENT_SOURCE_DIR_KEEL)
+            foreach(_keel_cand
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../../keelcpp/keel"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../keelcpp/keel"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../keelcpp/keel"
+            )
+                if(EXISTS "${_keel_cand}/CMakeLists.txt")
+                    set(FETCHCONTENT_SOURCE_DIR_KEEL "${_keel_cand}" CACHE PATH "")
+                    break()
+                endif()
+            endforeach()
+        endif()
+        include(FetchContent)
+        set(KEEL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(KEEL_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            keel
+            GIT_REPOSITORY https://github.com/keelcpp/keel.git
+            GIT_TAG        ca7fb3ed8f781d0b7af113422cdaa70a6da6eae4
+        )
+        FetchContent_MakeAvailable(keel)
+    endif()
+endif()
+
 add_library(numkit_value STATIC
     src/data_buffer.cpp
     src/dims.cpp
@@ -22,6 +49,8 @@ target_include_directories(numkit_value PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
+
+target_link_libraries(numkit_value PUBLIC keel::keel)
 
 if(EMSCRIPTEN)
     target_compile_options(numkit_value PRIVATE -fexceptions)

@@ -1,14 +1,14 @@
-// include/heap_object.hpp
+// include/numkit/value/heap_object.hpp
 #pragma once
 
 #include <numkit/value/data_buffer.hpp>
 #include <numkit/value/dims.hpp>
 #include <numkit/value/value_type.hpp>
 
-#include <atomic>
+#include <keel/array.h>
+
 #include <map>
 #include <memory>
-#include <memory_resource>
 #include <string>
 #include <vector>
 
@@ -20,59 +20,39 @@ struct ObjectState; // OBJECT instance state (see object.hpp); held by shared_pt
 // ============================================================
 // HeapObject — ref-counted storage for non-scalar values
 //
-// Holds arrays, cells, structs, func handles.
+// Holds arrays, cells, structs, func handles, and class instances.
 // Shared via COW (copy-on-write) through refCount.
 // ============================================================
 struct HeapObject
 {
-    std::atomic<int> refCount{1};
+    detail::RefCount refCount{1};
     ValueType type = ValueType::EMPTY;
     Dims dims;
-    std::pmr::memory_resource *mr = nullptr;  // not owned; outlives the heap
+    keel::Allocator *alloc = nullptr;  // not owned; outlives the heap
 
-    // Array data (DOUBLE, INT*, UINT*, LOGICAL, CHAR, COMPLEX)
+    // Array data (DOUBLE, SINGLE, INT*, UINT*, LOGICAL, CHAR, COMPLEX)
     DataBuffer *buffer = nullptr;
 
-    // Extended data — allocated only for CELL, STRUCT, FUNC_HANDLE.
-    // The wrapper objects themselves (vector / map headers) are
-    // bookkeeping (~24-48 bytes) on the global heap; their internal
-    // buffers (which hold the actual user data — Value slots and map
-    // nodes) flow through `mr`. funcName is always a short identifier
-    // that fits in std::string's SBO; not user data, kept simple.
-    //
-    // STRUCT layout: array of structs (AoS). `structArray` always
-    // holds `numel()` per-element field maps; a "single struct" is
-    // simply `structArray->size() == 1`. The accessors `field()` /
-    // `structFields()` forward to `(*structArray)[0]` in that case so
-    // the user-facing single-struct semantics are preserved.
-    std::pmr::vector<Value> *cellData = nullptr;
-    std::pmr::vector<std::pmr::map<std::string, Value>> *structArray = nullptr;
-    // Insertion-order tracker for struct fields (BUG #15 fix).
-    // MATLAB's fieldnames() returns fields in the order they were first
-    // added; std::map iterates alphabetically so we maintain a parallel
-    // vector. Shared across all elements of a struct array (the field
-    // set is uniform per MATLAB semantics — see structFields() doc).
-    // nullptr until first STRUCT allocation; ownership matches structArray.
-    std::pmr::vector<std::string> *fieldOrder = nullptr;
+    // Extended data — allocated only for CELL, STRING, CSL, STRUCT, FUNC_HANDLE.
+    // CELL / STRING / CSL element slots flow through `alloc` via `keel::Array<Value>`.
+    // STRUCT layout: array of structs (AoS). `structArray` holds `numel()` per-element
+    // field maps; a single struct has `structArray->size() == 1`.
+    keel::Array<Value> *cellData = nullptr;
+    std::vector<std::map<std::string, Value>> *structArray = nullptr;
+    // Insertion-order tracker for struct fields so fieldnames() preserves creation order.
+    std::vector<std::string> *fieldOrder = nullptr;
     std::string *funcName = nullptr;
-    // For anonymous-function handles only: the reconstructed source text
-    // (e.g. "@(x)x+1") that func2str returns. nullptr for named handles
-    // (which return their bare name) and all non-handle values.
+    // Reconstructed source text for anonymous-function handles (e.g. "@(x)x+1").
     std::string *funcSource = nullptr;
 
-    // ── OBJECT (class instance / array) — object.hpp / object_model.md ──
-    // objClass: registry key (class name). objStates: per-element instance
-    // state, length == numel() (a scalar object is a 1-element vector; the
-    // shape lives in `dims`). objIsHandle: cached from the class — drives
-    // clone() per element (share the shared_ptr for handle classes,
-    // deep-copy the ObjectState for value classes).
+    // OBJECT (class instance / array)
     std::string *objClass = nullptr;
     std::vector<std::shared_ptr<ObjectState>> objStates;
     bool objIsHandle = false;
     bool isSingleComplex = false;
 
     // Capacity for appendScalar amortization
-    size_t appendCapacity = 0;
+    keel::usize appendCapacity = 0;
 
     HeapObject() = default;
     ~HeapObject();
@@ -80,8 +60,9 @@ struct HeapObject
     HeapObject(const HeapObject &) = delete;
     HeapObject &operator=(const HeapObject &) = delete;
 
-    void addRef() { refCount.fetch_add(1, std::memory_order_relaxed); }
-    bool release() { return refCount.fetch_sub(1, std::memory_order_acq_rel) == 1; }
+    void addRef() noexcept { detail::refInc(refCount); }
+    bool release() noexcept { return detail::refDecIsZero(refCount); }
+    keel::i32 loadRefCount() const noexcept { return detail::refLoadAcquire(refCount); }
 
     // Deep clone for COW
     HeapObject *clone() const;

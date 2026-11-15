@@ -1,51 +1,57 @@
-// core/src/data_buffer.cpp
+// src/data_buffer.cpp
 #include <numkit/value/data_buffer.hpp>
 
 #include <new>
-#include <stdexcept>
 
 namespace numkit {
 
-DataBuffer::DataBuffer(size_t bytes, std::pmr::memory_resource *mr)
+namespace {
+constexpr keel::usize bufferAlign(keel::usize bytes) noexcept
+{
+    return (bytes >= keel::kSimdAlign) ? keel::kSimdAlign : keel::kDefaultAlign;
+}
+} // namespace
+
+DataBuffer::DataBuffer(keel::usize bytes, keel::Allocator *alloc)
     : bytes_(bytes)
     , refCount_(1)
-    , mr_(mr ? mr : std::pmr::get_default_resource())
+    , alloc_(alloc ? alloc : keel::default_allocator())
     , owns_(true)
 {
     if (bytes > 0) {
-        data_ = mr_->allocate(bytes, alignof(std::max_align_t));
+        data_ = alloc_->try_alloc_bytes(bytes, bufferAlign(bytes));
         if (!data_)
-            throw std::runtime_error("DataBuffer: allocation failed");
+            throw std::bad_alloc();
     }
 }
 
-DataBuffer::DataBuffer(ViewTag, void *external, size_t bytes) noexcept
+DataBuffer::DataBuffer(ViewTag, void *external, keel::usize bytes) noexcept
     : data_(external)
     , bytes_(bytes)
     , refCount_(1)
-    , mr_(std::pmr::get_default_resource())
+    , alloc_(keel::default_allocator())
     , owns_(false)
 {}
 
 DataBuffer::~DataBuffer()
 {
     if (data_ && owns_)
-        mr_->deallocate(data_, bytes_, alignof(std::max_align_t));
+        alloc_->free_bytes(data_, bytes_, bufferAlign(bytes_));
 }
 
-void DataBuffer::addRef()
+void DataBuffer::addRef() noexcept
 {
-    refCount_.fetch_add(1, std::memory_order_relaxed);
+    detail::refInc(refCount_);
 }
 
-bool DataBuffer::release()
+bool DataBuffer::release() noexcept
 {
-    return refCount_.fetch_sub(1, std::memory_order_acq_rel) == 1;
+    return detail::refDecIsZero(refCount_);
 }
 
-int DataBuffer::refCount() const
+keel::i32 DataBuffer::refCount() const noexcept
 {
-    return refCount_.load(std::memory_order_acquire);
+    return detail::refLoadAcquire(refCount_);
 }
 
 } // namespace numkit

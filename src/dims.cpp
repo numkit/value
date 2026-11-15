@@ -1,9 +1,8 @@
 // src/dims.cpp
 #include <numkit/value/dims.hpp>
 
-#include <algorithm>
-#include <cstdlib>
-#include <cstring>
+#include <keel/memory.h>
+
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -18,7 +17,7 @@ Dims::Dims() : heap_(nullptr), nd_(2)
     inline_[3] = 1;
 }
 
-Dims::Dims(size_t r, size_t c) : heap_(nullptr), nd_(2)
+Dims::Dims(keel::usize r, keel::usize c) : heap_(nullptr), nd_(2)
 {
     inline_[0] = r;
     inline_[1] = c;
@@ -26,7 +25,7 @@ Dims::Dims(size_t r, size_t c) : heap_(nullptr), nd_(2)
     inline_[3] = 1;
 }
 
-Dims::Dims(size_t r, size_t c, size_t p) : heap_(nullptr), nd_(3)
+Dims::Dims(keel::usize r, keel::usize c, keel::usize p) : heap_(nullptr), nd_(3)
 {
     inline_[0] = r;
     inline_[1] = c;
@@ -34,55 +33,54 @@ Dims::Dims(size_t r, size_t c, size_t p) : heap_(nullptr), nd_(3)
     inline_[3] = 1;
 }
 
-Dims::Dims(const size_t *dims, int nd) : heap_(nullptr)
+Dims::Dims(const keel::usize *dims, keel::i32 nd) : heap_(nullptr)
 {
     setND(dims, nd);
 }
 
-void Dims::setND(const size_t *dims, int nd)
+void Dims::setND(const keel::usize *dims, keel::i32 nd)
 {
     if (nd < 1) nd = 1;
     if (nd > kMaxRank)
         throw std::runtime_error(
             "Maximum array dimensionality (" + std::to_string(kMaxRank) + ") exceeded");
-    nd_ = static_cast<uint8_t>(nd);
-    for (int i = 0; i < kInlineCap; ++i)
+    nd_ = static_cast<keel::u8>(nd);
+    for (keel::i32 i = 0; i < kInlineCap; ++i)
         inline_[i] = (i < nd) ? dims[i] : 1;
     if (nd > kInlineCap) {
-        const int extra = nd - kInlineCap;
-        heap_ = static_cast<size_t *>(std::malloc(extra * sizeof(size_t)));
+        const keel::usize extra = static_cast<keel::usize>(nd - kInlineCap);
+        heap_ = keel::default_allocator()->try_alloc_array<keel::usize>(extra);
         if (!heap_)
-            throw std::bad_alloc(); // don't memcpy into a null buffer on OOM
-        std::memcpy(heap_, dims + kInlineCap, extra * sizeof(size_t));
+            throw std::bad_alloc();
+        keel::mem_copy(heap_, dims + kInlineCap, extra * sizeof(keel::usize));
     }
 }
 
 void Dims::freeHeap() noexcept
 {
     if (heap_) {
-        std::free(heap_);
+        const keel::usize extra = static_cast<keel::usize>(nd_ - kInlineCap);
+        keel::default_allocator()->free_array(heap_, extra);
         heap_ = nullptr;
     }
 }
 
 Dims::Dims(const Dims &o) : heap_(nullptr), nd_(o.nd_)
 {
-    std::memcpy(inline_, o.inline_, sizeof(inline_));
+    keel::mem_copy(inline_, o.inline_, sizeof(inline_));
     if (o.heap_) {
-        const int extra = nd_ - kInlineCap;
-        heap_ = static_cast<size_t *>(std::malloc(extra * sizeof(size_t)));
+        const keel::usize extra = static_cast<keel::usize>(nd_ - kInlineCap);
+        heap_ = keel::default_allocator()->try_alloc_array<keel::usize>(extra);
         if (!heap_)
-            throw std::bad_alloc(); // don't memcpy into a null buffer on OOM
-        std::memcpy(heap_, o.heap_, extra * sizeof(size_t));
+            throw std::bad_alloc();
+        keel::mem_copy(heap_, o.heap_, extra * sizeof(keel::usize));
     }
 }
 
 Dims::Dims(Dims &&o) noexcept : heap_(o.heap_), nd_(o.nd_)
 {
-    std::memcpy(inline_, o.inline_, sizeof(inline_));
+    keel::mem_copy(inline_, o.inline_, sizeof(inline_));
     o.heap_ = nullptr;
-    // o keeps its inline_ + nd_; not strictly necessary to reset since
-    // its dtor on a null heap_ is a no-op.
 }
 
 Dims &Dims::operator=(const Dims &o)
@@ -90,13 +88,13 @@ Dims &Dims::operator=(const Dims &o)
     if (this == &o) return *this;
     freeHeap();
     nd_ = o.nd_;
-    std::memcpy(inline_, o.inline_, sizeof(inline_));
+    keel::mem_copy(inline_, o.inline_, sizeof(inline_));
     if (o.heap_) {
-        const int extra = nd_ - kInlineCap;
-        heap_ = static_cast<size_t *>(std::malloc(extra * sizeof(size_t)));
+        const keel::usize extra = static_cast<keel::usize>(nd_ - kInlineCap);
+        heap_ = keel::default_allocator()->try_alloc_array<keel::usize>(extra);
         if (!heap_)
-            throw std::bad_alloc(); // don't memcpy into a null buffer on OOM
-        std::memcpy(heap_, o.heap_, extra * sizeof(size_t));
+            throw std::bad_alloc();
+        keel::mem_copy(heap_, o.heap_, extra * sizeof(keel::usize));
     }
     return *this;
 }
@@ -105,10 +103,10 @@ Dims &Dims::operator=(Dims &&o) noexcept
 {
     if (this == &o) return *this;
     freeHeap();
-    nd_  = o.nd_;
-    std::memcpy(inline_, o.inline_, sizeof(inline_));
-    heap_     = o.heap_;
-    o.heap_   = nullptr;
+    nd_     = o.nd_;
+    keel::mem_copy(inline_, o.inline_, sizeof(inline_));
+    heap_   = o.heap_;
+    o.heap_ = nullptr;
     return *this;
 }
 
@@ -117,7 +115,7 @@ Dims::~Dims()
     freeHeap();
 }
 
-size_t Dims::sub2indChecked(size_t r, size_t c) const
+keel::usize Dims::sub2indChecked(keel::usize r, keel::usize c) const
 {
     if (r >= inline_[0] || c >= inline_[1])
         throw std::runtime_error("Index (" + std::to_string(r + 1) + ","
@@ -126,7 +124,7 @@ size_t Dims::sub2indChecked(size_t r, size_t c) const
     return c * inline_[0] + r;
 }
 
-size_t Dims::sub2indChecked(size_t r, size_t c, size_t p) const
+keel::usize Dims::sub2indChecked(keel::usize r, keel::usize c, keel::usize p) const
 {
     if (r >= inline_[0] || c >= inline_[1] || p >= inline_[2])
         throw std::runtime_error("Index exceeds dimensions");
@@ -135,14 +133,10 @@ size_t Dims::sub2indChecked(size_t r, size_t c, size_t p) const
 
 bool Dims::operator==(const Dims &o) const noexcept
 {
-    // Semantic equality: compare with implicit trailing 1s. Inline slots
-    // [0, kInlineCap) are always populated correctly (1 in unused slots),
-    // so a direct compare suffices for the common case. For ndim > kInlineCap
-    // either side, fall through to dim() which returns 1 past ndim.
-    if (std::memcmp(inline_, o.inline_, sizeof(inline_)) != 0)
+    if (!keel::mem_eq(inline_, o.inline_, sizeof(inline_)))
         return false;
-    const int n = std::max(static_cast<int>(nd_), static_cast<int>(o.nd_));
-    for (int i = kInlineCap; i < n; ++i)
+    const keel::i32 n = keel::max(static_cast<keel::i32>(nd_), static_cast<keel::i32>(o.nd_));
+    for (keel::i32 i = kInlineCap; i < n; ++i)
         if (dim(i) != o.dim(i)) return false;
     return true;
 }

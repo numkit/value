@@ -1,15 +1,14 @@
-// core/include/numkit/value/value_type.hpp
+// include/numkit/value/value_type.hpp
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
+#include <keel/core.h>
 
 namespace numkit {
 
 // ============================================================
 // ValueType — element type enum
 // ============================================================
-enum class ValueType : uint8_t {
+enum class ValueType : keel::u8 {
     EMPTY,
     DOUBLE,
     COMPLEX,
@@ -28,16 +27,13 @@ enum class ValueType : uint8_t {
     UINT64,
     SINGLE,
     STRING,
-    OBJECT,  // class instance (builtin now, user classdef later); see object_model.md
-    CSL      // comma-separated list — a TRANSIENT value-list produced by c{:} / c{idx} /
-             // s.field expansion that splicing contexts (call args, [..], {..}, multi-
-             // assign) flatten. Never stored in a variable; a single-value context must
-             // collapse it (1 elem -> the elem; N -> "too many values"). Reuses
-             // HeapObject::cellData for storage. See dev-docs/memory/csl_first_class.md.
+    OBJECT,  // class instance (builtin or user classdef)
+    CSL      // comma-separated list — transient value-list produced by c{:} / c{idx} /
+             // s.field expansion that splicing contexts flatten. Reuses HeapObject::cellData.
 };
 
 const char *mtypeName(ValueType t);
-size_t elementSize(ValueType t);
+keel::usize elementSize(ValueType t);
 bool isIntegerType(ValueType t);
 bool isFloatType(ValueType t); // double or single
 

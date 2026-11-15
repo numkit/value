@@ -1,6 +1,10 @@
 #include <numkit/value/shape_ops.hpp>
 #include <numkit/value/value.hpp>
 #include <numkit/value/object.hpp> // ObjectState (deepCopy) for object arrays
+
+#include <keel/bits.h>
+#include <keel/math.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -13,85 +17,31 @@ namespace numkit {
 
 namespace {
 
-inline size_t checkedMulSize(size_t a, size_t b)
+inline keel::usize checkedMulSize(keel::usize a, keel::usize b)
 {
-    if (a != 0 && b > std::numeric_limits<size_t>::max() / a)
+    keel::usize out = 0;
+    if (!keel::checked_mul(a, b, out))
         throw std::runtime_error("Maximum variable size allowed by the program is exceeded");
-    return a * b;
+    return out;
 }
 
-inline size_t checkedMulDims(const size_t *dims, int nd)
+inline keel::usize checkedMulDims(const keel::usize *dims, keel::i32 nd)
 {
-    size_t total = 1;
-    for (int i = 0; i < nd; ++i)
+    keel::usize total = 1;
+    for (keel::i32 i = 0; i < nd; ++i)
         total = checkedMulSize(total, dims[i]);
     return total;
 }
 
 template <typename T>
-inline T roundSaturateInt(double v) noexcept
+inline T roundSaturateInt(keel::f64 v) noexcept
 {
-    if (std::isnan(v))
-        return T(0);
-    if constexpr (std::is_unsigned_v<T>) {
-        if (v <= 0.0)
-            return T(0);
-        if constexpr (sizeof(T) >= 8) {
-            constexpr double kMaxU64 = 18446744073709551616.0; // 2^64 (exact in double)
-            if (v >= kMaxU64)
-                return std::numeric_limits<T>::max();
-            const double r = std::round(v);
-            if (r >= kMaxU64)
-                return std::numeric_limits<T>::max();
-            return static_cast<T>(r);
-        } else {
-            constexpr double hi = static_cast<double>(std::numeric_limits<T>::max());
-            if (v >= hi)
-                return std::numeric_limits<T>::max();
-            const double r = std::round(v);
-            if (r >= hi)
-                return std::numeric_limits<T>::max();
-            return static_cast<T>(r);
-        }
-    } else {
-        if constexpr (sizeof(T) >= 8) {
-            constexpr double kMinI64 = -9223372036854775808.0; // -2^63 (exact in double)
-            constexpr double kMaxI64 =  9223372036854775808.0; // +2^63 (exact in double)
-            if (v <= kMinI64)
-                return std::numeric_limits<T>::min();
-            if (v >= kMaxI64)
-                return std::numeric_limits<T>::max();
-            const double r = std::round(v);
-            if (r <= kMinI64)
-                return std::numeric_limits<T>::min();
-            if (r >= kMaxI64)
-                return std::numeric_limits<T>::max();
-            return static_cast<T>(r);
-        } else {
-            constexpr double lo = static_cast<double>(std::numeric_limits<T>::min());
-            constexpr double hi = static_cast<double>(std::numeric_limits<T>::max());
-            if (v <= lo)
-                return std::numeric_limits<T>::min();
-            if (v >= hi)
-                return std::numeric_limits<T>::max();
-            const double r = std::round(v);
-            if (r <= lo)
-                return std::numeric_limits<T>::min();
-            if (r >= hi)
-                return std::numeric_limits<T>::max();
-            return static_cast<T>(r);
-        }
-    }
+    return keel::round_sat<T>(v);
 }
 
-inline char doubleToCharSafe(double v) noexcept
+inline char doubleToCharSafe(keel::f64 v) noexcept
 {
-    if (std::isnan(v) || v <= 0.0)
-        return static_cast<char>(0);
-    const double r = std::round(v);
-    if (r >= 255.0)
-        return static_cast<char>(static_cast<unsigned char>(255));
-    return static_cast<char>(static_cast<unsigned char>(r));
+    return static_cast<char>(keel::round_sat<keel::u8>(v));
 }
 
 } // namespace
@@ -176,7 +126,7 @@ void Value::detach()
     // unconditionally — refcount alone doesn't capture the "external
     // memory we promised not to write" invariant.
     const bool isView = heap_->buffer && !heap_->buffer->owns();
-    if (!isView && heap_->refCount.load(std::memory_order_acquire) <= 1)
+    if (!isView && heap_->loadRefCount() <= 1)
         return;
     HeapObject *c = heap_->clone();
     releaseHeap();
@@ -194,7 +144,7 @@ HeapObject *Value::mutableHeap()
 // source bytes in. count=0 returns an empty 1×0 matrix.
 Value Value::makeContiguous(const void *src, size_t count,
                             ValueType type, size_t elemSize,
-                            std::pmr::memory_resource *mr)
+                            keel::Allocator *mr)
 {
     Value v = Value::matrix(1, count, type, mr);
     if (count > 0 && src != nullptr) {
@@ -203,7 +153,7 @@ Value Value::makeContiguous(const void *src, size_t count,
     return v;
 }
 
-Value::Value(std::initializer_list<double> il, std::pmr::memory_resource *mr)
+Value::Value(std::initializer_list<double> il, keel::Allocator *mr)
     : Value()
 {
     *this = makeContiguous(il.begin(), il.size(),
@@ -216,7 +166,7 @@ Value Value::view(const void *data, ValueType type, Dims dims)
     auto *h = new HeapObject();
     h->type = type;
     h->dims = std::move(dims);
-    h->mr = std::pmr::get_default_resource();
+    h->alloc = keel::default_allocator();
     const size_t bytes = h->dims.numel() * elementSize(type);
     h->buffer = new DataBuffer(DataBuffer::ViewTag{},
                                 const_cast<void *>(data),
@@ -225,20 +175,20 @@ Value Value::view(const void *data, ValueType type, Dims dims)
     return v;
 }
 
-Value Value::scalar(double v, std::pmr::memory_resource *)
+Value Value::scalar(double v, keel::Allocator *)
 {
     Value m;
     m.scalar_ = v;
     m.heap_ = nullptr;
     return m;
 }
-Value Value::logicalScalar(bool v, std::pmr::memory_resource *)
+Value Value::logicalScalar(bool v, keel::Allocator *)
 {
     Value m;
     m.heap_ = v ? logicalTrueTag() : logicalFalseTag();
     return m;
 }
-Value Value::matrix(size_t rows, size_t cols, ValueType t, std::pmr::memory_resource *mr)
+Value Value::matrix(size_t rows, size_t cols, ValueType t, keel::Allocator *mr)
 {
     if (rows == 1 && cols == 1 && t == ValueType::DOUBLE)
         return scalar(0.0, mr);
@@ -248,7 +198,7 @@ Value Value::matrix(size_t rows, size_t cols, ValueType t, std::pmr::memory_reso
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = t;
     h->dims = {rows, cols};
-    h->mr = mr;
+    h->alloc = mr;
     if (bytes > 0) {
         h->buffer = new DataBuffer(bytes, mr);
         std::memset(h->buffer->data(), 0, bytes);
@@ -256,7 +206,7 @@ Value Value::matrix(size_t rows, size_t cols, ValueType t, std::pmr::memory_reso
     m.heap_ = h.release();
     return m;
 }
-Value Value::matrix3d(size_t rows, size_t cols, size_t pages, ValueType t, std::pmr::memory_resource *mr)
+Value Value::matrix3d(size_t rows, size_t cols, size_t pages, ValueType t, keel::Allocator *mr)
 {
     const size_t total = checkedMulSize(checkedMulSize(rows, cols), pages);
     const size_t bytes = checkedMulSize(total, elementSize(t));
@@ -264,7 +214,7 @@ Value Value::matrix3d(size_t rows, size_t cols, size_t pages, ValueType t, std::
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = t;
     h->dims = {rows, cols, pages};
-    h->mr = mr;
+    h->alloc = mr;
     if (bytes > 0) {
         h->buffer = new DataBuffer(bytes, mr);
         std::memset(h->buffer->data(), 0, bytes);
@@ -272,7 +222,7 @@ Value Value::matrix3d(size_t rows, size_t cols, size_t pages, ValueType t, std::
     m.heap_ = h.release();
     return m;
 }
-Value Value::matrixND(const size_t *dims, int nd, ValueType t, std::pmr::memory_resource *mr)
+Value Value::matrixND(const size_t *dims, int nd, ValueType t, keel::Allocator *mr)
 {
     if (nd <= 0) return Value();
     if (nd == 1)
@@ -290,7 +240,7 @@ Value Value::matrixND(const size_t *dims, int nd, ValueType t, std::pmr::memory_
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = t;
     h->dims = std::move(newDims);
-    h->mr = mr;
+    h->alloc = mr;
     if (bytes > 0) {
         h->buffer = new DataBuffer(bytes, mr);
         std::memset(h->buffer->data(), 0, bytes);
@@ -298,13 +248,13 @@ Value Value::matrixND(const size_t *dims, int nd, ValueType t, std::pmr::memory_
     m.heap_ = h.release();
     return m;
 }
-Value Value::fromString(const std::string &s, std::pmr::memory_resource *mr)
+Value Value::fromString(const std::string &s, keel::Allocator *mr)
 {
     Value m;
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::CHAR;
     h->dims = {1, s.size()};
-    h->mr = mr;
+    h->alloc = mr;
     if (!s.empty()) {
         h->buffer = new DataBuffer(s.size(), mr);
         std::memcpy(h->buffer->data(), s.data(), s.size());
@@ -312,35 +262,35 @@ Value Value::fromString(const std::string &s, std::pmr::memory_resource *mr)
     m.heap_ = h.release();
     return m;
 }
-Value Value::cell(size_t rows, size_t cols, std::pmr::memory_resource *mr)
+Value Value::cell(size_t rows, size_t cols, keel::Allocator *mr)
 {
-    if (!mr) mr = std::pmr::get_default_resource();
+    if (!mr) mr = keel::default_allocator();
     const size_t total = checkedMulSize(rows, cols);
     Value m;
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::CELL;
     h->dims = {rows, cols};
-    h->mr = mr;
-    h->cellData = new std::pmr::vector<Value>(total, mr);
+    h->alloc = mr;
+    h->cellData = new keel::Array<Value>(total, mr);
     m.heap_ = h.release();
     return m;
 }
-Value Value::cell3D(size_t rows, size_t cols, size_t pages, std::pmr::memory_resource *mr)
+Value Value::cell3D(size_t rows, size_t cols, size_t pages, keel::Allocator *mr)
 {
-    if (!mr) mr = std::pmr::get_default_resource();
+    if (!mr) mr = keel::default_allocator();
     const size_t total = checkedMulSize(checkedMulSize(rows, cols), pages);
     Value m;
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::CELL;
     h->dims = {rows, cols, pages};
-    h->mr = mr;
-    h->cellData = new std::pmr::vector<Value>(total, mr);
+    h->alloc = mr;
+    h->cellData = new keel::Array<Value>(total, mr);
     m.heap_ = h.release();
     return m;
 }
-Value Value::cellND(const size_t *dims, int nd, std::pmr::memory_resource *mr)
+Value Value::cellND(const size_t *dims, int nd, keel::Allocator *mr)
 {
-    if (!mr) mr = std::pmr::get_default_resource();
+    if (!mr) mr = keel::default_allocator();
     if (nd <= 0) return cell(0, 0, mr);
     if (nd == 1) return cell(dims[0], 1, mr);
     if (nd == 2) return cell(dims[0], dims[1], mr);
@@ -351,23 +301,23 @@ Value Value::cellND(const size_t *dims, int nd, std::pmr::memory_resource *mr)
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::CELL;
     h->dims = std::move(newDims);
-    h->mr = mr;
-    h->cellData = new std::pmr::vector<Value>(total, mr);
+    h->alloc = mr;
+    h->cellData = new keel::Array<Value>(total, mr);
     m.heap_ = h.release();
     return m;
 }
-Value Value::csl(size_t n, std::pmr::memory_resource *mr)
+Value Value::csl(size_t n, keel::Allocator *mr)
 {
     // A comma-separated list is stored exactly like a 1xn cell (shared cellData
     // backing); only the type tag distinguishes it. Producers fill the slots via
     // cslAt()/cellAt(); splicing contexts read cslCount() + cslAt().
-    if (!mr) mr = std::pmr::get_default_resource();
+    if (!mr) mr = keel::default_allocator();
     Value m;
     auto *h = new HeapObject();
     h->type = ValueType::CSL;
     h->dims = {1, n};
-    h->mr = mr;
-    h->cellData = new std::pmr::vector<Value>(n, mr);
+    h->alloc = mr;
+    h->cellData = new keel::Array<Value>(n, mr);
     m.heap_ = h;
     return m;
 }
@@ -386,49 +336,49 @@ Value collapseCsl(Value v)
                   + " values where 1 is required");
 }
 
-Value Value::stringScalar(const std::string &s, std::pmr::memory_resource *mr)
+Value Value::stringScalar(const std::string &s, keel::Allocator *mr)
 {
-    if (!mr) mr = std::pmr::get_default_resource();
+    if (!mr) mr = keel::default_allocator();
     Value m;
     auto *h = new HeapObject();
     h->type = ValueType::STRING;
     h->dims = {1, 1};
-    h->mr = mr;
-    h->cellData = new std::pmr::vector<Value>(1, Value::fromString(s, mr), mr);
+    h->alloc = mr;
+    h->cellData = new keel::Array<Value>(1, Value::fromString(s, mr), mr);
     m.heap_ = h;
     return m;
 }
-Value Value::stringArray(size_t rows, size_t cols, std::pmr::memory_resource *mr)
+Value Value::stringArray(size_t rows, size_t cols, keel::Allocator *mr)
 {
-    if (!mr) mr = std::pmr::get_default_resource();
+    if (!mr) mr = keel::default_allocator();
     const size_t total = checkedMulSize(rows, cols);
     Value m;
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::STRING;
     h->dims = {rows, cols};
-    h->mr = mr;
+    h->alloc = mr;
     // Initialize with empty strings
-    h->cellData = new std::pmr::vector<Value>(total, Value::fromString("", mr), mr);
+    h->cellData = new keel::Array<Value>(total, Value::fromString("", mr), mr);
     m.heap_ = h.release();
     return m;
 }
-Value Value::stringArray3D(size_t rows, size_t cols, size_t pages, std::pmr::memory_resource *mr)
+Value Value::stringArray3D(size_t rows, size_t cols, size_t pages, keel::Allocator *mr)
 {
-    if (!mr) mr = std::pmr::get_default_resource();
+    if (!mr) mr = keel::default_allocator();
     const size_t total = checkedMulSize(checkedMulSize(rows, cols), pages);
     Value m;
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::STRING;
     h->dims = {rows, cols, pages};
-    h->mr = mr;
-    h->cellData = new std::pmr::vector<Value>(total,
+    h->alloc = mr;
+    h->cellData = new keel::Array<Value>(total,
                                                Value::fromString("", mr), mr);
     m.heap_ = h.release();
     return m;
 }
-Value Value::stringArrayND(const size_t *dims, int nd, std::pmr::memory_resource *mr)
+Value Value::stringArrayND(const size_t *dims, int nd, keel::Allocator *mr)
 {
-    if (!mr) mr = std::pmr::get_default_resource();
+    if (!mr) mr = keel::default_allocator();
     if (nd <= 0) return stringArray(0, 0, mr);
     if (nd == 1) return stringArray(dims[0], 1, mr);
     if (nd == 2) return stringArray(dims[0], dims[1], mr);
@@ -439,8 +389,8 @@ Value Value::stringArrayND(const size_t *dims, int nd, std::pmr::memory_resource
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::STRING;
     h->dims = std::move(newDims);
-    h->mr = mr;
-    h->cellData = new std::pmr::vector<Value>(total, Value::fromString("", mr), mr);
+    h->alloc = mr;
+    h->cellData = new keel::Array<Value>(total, Value::fromString("", mr), mr);
     m.heap_ = h.release();
     return m;
 }
@@ -456,54 +406,48 @@ void Value::stringElemSet(size_t i, const std::string &s)
         throw std::runtime_error("Not a string array");
     detach();
     if (i >= heap_->cellData->size())
-        heap_->cellData->resize(i + 1, Value::fromString("", heap_->mr));
-    (*heap_->cellData)[i] = Value::fromString(s, heap_->mr);
+        heap_->cellData->resize(i + 1, Value::fromString("", heap_->alloc));
+    (*heap_->cellData)[i] = Value::fromString(s, heap_->alloc);
 }
-Value Value::structure(std::pmr::memory_resource *mr)
+Value Value::structure(keel::Allocator *mr)
 {
     return structArray(1, 1, mr);
 }
 
-Value Value::structArray(size_t rows, size_t cols, std::pmr::memory_resource *mr)
+Value Value::structArray(size_t rows, size_t cols, keel::Allocator *mr)
 {
-    if (!mr) mr = std::pmr::get_default_resource();
+    if (!mr) mr = keel::default_allocator();
     const size_t n = checkedMulSize(rows, cols);
     Value m;
     std::unique_ptr<HeapObject> h(new HeapObject());
     h->type = ValueType::STRUCT;
     h->dims = {rows, cols};
-    h->mr = mr;
-    h->structArray =
-        new std::pmr::vector<std::pmr::map<std::string, Value>>(mr);
-    h->structArray->reserve(n);
-    using MapT = std::pmr::map<std::string, Value>;
-    for (size_t i = 0; i < n; ++i)
-        h->structArray->emplace_back(MapT(mr));
-    // BUG #15 fix: insertion-order tracker (parallel to structArray).
-    h->fieldOrder = new std::pmr::vector<std::string>(mr);
+    h->alloc = mr;
+    h->structArray = new std::vector<std::map<std::string, Value>>(n);
+    h->fieldOrder = new std::vector<std::string>();
     m.heap_ = h.release();
     return m;
 }
-Value Value::funcHandle(const std::string &name, std::pmr::memory_resource *mr)
+Value Value::funcHandle(const std::string &name, keel::Allocator *mr)
 {
     Value m;
     auto *h = new HeapObject();
     h->type = ValueType::FUNC_HANDLE;
     h->dims = {1, 1};
-    h->mr = mr;
+    h->alloc = mr;
     h->funcName = new std::string(name);
     m.heap_ = h;
     return m;
 }
 Value Value::object(const std::string &className,
                     std::shared_ptr<ObjectState> state, bool isHandle,
-                    std::pmr::memory_resource *mr)
+                    keel::Allocator *mr)
 {
     Value m;
     auto *h = new HeapObject();
     h->type = ValueType::OBJECT;
     h->dims = {1, 1}; // scalar object = 1×1 array of one state
-    h->mr = mr;
+    h->alloc = mr;
     h->objClass = new std::string(className);
     h->objStates.push_back(std::move(state));
     h->objIsHandle = isHandle;
@@ -512,13 +456,13 @@ Value Value::object(const std::string &className,
 }
 Value Value::objectArray(const std::string &className, const Dims &dims,
                          std::vector<std::shared_ptr<ObjectState>> states, bool isHandle,
-                         std::pmr::memory_resource *mr)
+                         keel::Allocator *mr)
 {
     Value m;
     auto *h = new HeapObject();
     h->type = ValueType::OBJECT;
     h->dims = dims;
-    h->mr = mr;
+    h->alloc = mr;
     h->objClass = new std::string(className);
     h->objStates = std::move(states);
     h->objIsHandle = isHandle;
@@ -563,12 +507,12 @@ size_t Value::colonCount(double start, double step, double stop)
     return static_cast<size_t>(n);
 }
 
-Value Value::colonRange(double start, double stop, std::pmr::memory_resource *mr)
+Value Value::colonRange(double start, double stop, keel::Allocator *mr)
 {
     return colonRange(start, 1.0, stop, mr);
 }
 
-Value Value::colonRange(double start, double step, double stop, std::pmr::memory_resource *mr)
+Value Value::colonRange(double start, double step, double stop, keel::Allocator *mr)
 {
     size_t count = Value::colonCount(start, step, stop);
     auto result = Value::matrix(1, count, ValueType::DOUBLE, mr);
@@ -586,13 +530,13 @@ Value Value::colonRange(double start, double step, double stop, std::pmr::memory
 }
 
 Value Value::colonRangeTyped(double start, double stop, ValueType t,
-                              std::pmr::memory_resource *mr)
+                              keel::Allocator *mr)
 {
     return colonRangeTyped(start, 1.0, stop, t, mr);
 }
 
 Value Value::colonRangeTyped(double start, double step, double stop,
-                              ValueType t, std::pmr::memory_resource *mr)
+                              ValueType t, keel::Allocator *mr)
 {
     if (t == ValueType::DOUBLE)
         return colonRange(start, step, stop, mr);
@@ -694,7 +638,7 @@ static ValueType promoteNumericType(const Value *elems, size_t count)
 // (round half away from zero, then saturate to the class range). Used to finish
 // an integer concatenation that was computed in double precision.
 static Value castConcatToInteger(const Value &d, ValueType vt,
-                                 std::pmr::memory_resource *mr)
+                                 keel::Allocator *mr)
 {
     const auto &dd = d.dims();
     size_t dBuf[Dims::kMaxRank];
@@ -758,9 +702,9 @@ double Value::elemAsDouble(size_t idx) const
     }
 }
 
-// Read one element as Complex. Real-only types contribute zero
+// Read one element as keel::c64. Real-only types contribute zero
 // imaginary part, matching MATLAB's real→complex promotion rule.
-static Complex readElemAsComplex(const Value &v, size_t idx)
+static keel::c64 readElemAsComplex(const Value &v, size_t idx)
 {
     switch (v.type()) {
     case ValueType::COMPLEX:
@@ -771,7 +715,7 @@ static Complex readElemAsComplex(const Value &v, size_t idx)
     case ValueType::SINGLE:
     case ValueType::INT8: case ValueType::INT16: case ValueType::INT32: case ValueType::INT64:
     case ValueType::UINT8: case ValueType::UINT16: case ValueType::UINT32: case ValueType::UINT64:
-        return Complex(v.elemAsDouble(idx), 0.0);
+        return keel::c64(v.elemAsDouble(idx), 0.0);
     default:
         throw std::runtime_error(
             std::string("Cannot read element as complex from type '")
@@ -794,7 +738,7 @@ static uint8_t readElemAsLogical(const Value &v, size_t idx)
     case ValueType::UINT8: case ValueType::UINT16: case ValueType::UINT32: case ValueType::UINT64:
         return v.elemAsDouble(idx) != 0.0 ? 1 : 0;
     case ValueType::COMPLEX:
-        return (v.complexData()[idx] != Complex(0.0, 0.0)) ? 1 : 0;
+        return (v.complexData()[idx] != keel::c64(0.0, 0.0)) ? 1 : 0;
     default:
         throw std::runtime_error(
             std::string("Cannot read element as logical from type '")
@@ -858,7 +802,7 @@ static int collectHigherDims(const Value *elems, size_t count, size_t (&higherDi
 }
 
 // Copy elements from source into a column-major destination buffer.
-// Template avoids duplicating the loop structure for double vs Complex.
+// Template avoids duplicating the loop structure for double vs keel::c64.
 template<typename T, typename ReadFunc>
 static void copyBlock(T *dst, size_t dstRows, size_t dstCols,
                       const Value &src, size_t srcRows, size_t srcCols, size_t srcPages,
@@ -889,10 +833,10 @@ static void copyBlock(T *dst, size_t dstRows, size_t dstCols,
 // empties are neutral. Struct arrays concatenate element-wise with the
 // usual dimension rules.
 Value Value::concatStructs(const Value *elems, size_t count, bool vertical,
-                           std::pmr::memory_resource *mr)
+                           keel::Allocator *mr)
 {
     if (!mr)
-        mr = std::pmr::get_default_resource();
+        mr = keel::default_allocator();
     std::vector<const Value *> ops;
     for (size_t i = 0; i < count; ++i) {
         if (elems[i].isEmpty())
@@ -922,7 +866,7 @@ Value Value::concatStructs(const Value *elems, size_t count, bool vertical,
         }
     }
 
-    auto srcElem = [](const Value &v, size_t flat) -> const std::pmr::map<std::string, Value> & {
+    auto srcElem = [](const Value &v, size_t flat) -> const std::map<std::string, Value> & {
         return v.isStructArray() ? v.structArrayElem(flat) : v.structFields();
     };
 
@@ -973,10 +917,10 @@ Value Value::concatStructs(const Value *elems, size_t count, bool vertical,
 // value/handle rule (value classes deep-copy, handle classes alias).
 // Throws if objects are mixed with non-objects or different classes.
 Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
-                           std::pmr::memory_resource *mr)
+                           keel::Allocator *mr)
 {
     if (!mr)
-        mr = std::pmr::get_default_resource();
+        mr = keel::default_allocator();
     std::string clsName;
     bool found = false;
     bool handle = false;
@@ -1032,7 +976,7 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
     }
     auto *h = new HeapObject();
     h->type = ValueType::OBJECT;
-    h->mr = mr;
+    h->alloc = mr;
     h->objClass = new std::string(clsName);
     h->objIsHandle = handle;
     auto pushState = [&](const std::shared_ptr<ObjectState> &st) {
@@ -1087,7 +1031,7 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
     return out;
 }
 
-Value Value::horzcat(const Value *elems, size_t count, std::pmr::memory_resource *mr)
+Value Value::horzcat(const Value *elems, size_t count, keel::Allocator *mr)
 {
     // OBJECT concatenation: [a b] of same-class objects → a 1×N row array.
     for (size_t i = 0; i < count; ++i)
@@ -1295,7 +1239,7 @@ Value Value::horzcat(const Value *elems, size_t count, std::pmr::memory_resource
 // Concatenates along dimension 1 (rows).
 // Columns and pages must match across all elements.
 // ============================================================
-Value Value::vertcat(const Value *elems, size_t count, std::pmr::memory_resource *mr)
+Value Value::vertcat(const Value *elems, size_t count, keel::Allocator *mr)
 {
     // OBJECT concatenation: [a; b] of same-class objects → an N×1 column.
     for (size_t i = 0; i < count; ++i)
@@ -1484,7 +1428,7 @@ Value Value::vertcat(const Value *elems, size_t count, std::pmr::memory_resource
 // ============================================================
 
 // Helper: create a scalar Value of the same type as this array at linear index.
-Value Value::elemAt(size_t idx, std::pmr::memory_resource *mr) const
+Value Value::elemAt(size_t idx, keel::Allocator *mr) const
 {
     ValueType t = type();
     switch (t) {
@@ -1547,7 +1491,7 @@ Value Value::elemAt(size_t idx, std::pmr::memory_resource *mr) const
 }
 
 // 1D slice: extract elements at given linear indices.
-Value Value::reshape(size_t rows, size_t cols, std::pmr::memory_resource *mr) const
+Value Value::reshape(size_t rows, size_t cols, keel::Allocator *mr) const
 {
     if (rows * cols != numel())
         throw std::runtime_error("reshape: number of elements must not change");
@@ -1584,10 +1528,10 @@ Value Value::reshape(size_t rows, size_t cols, std::pmr::memory_resource *mr) co
 // MATLAB narrows a complex result with an all-zero imaginary part back to a real
 // double (declared in value.hpp). No-op unless COMPLEX with every imaginary
 // component exactly zero (a NaN imaginary part keeps it complex).
-Value narrowComplex(Value v, std::pmr::memory_resource *mr)
+Value narrowComplex(Value v, keel::Allocator *mr)
 {
     if (v.type() != ValueType::COMPLEX) return v;
-    const Complex *d = v.complexData();
+    const keel::c64 *d = v.complexData();
     const size_t n = v.numel();
     for (size_t i = 0; i < n; ++i)
         if (d[i].imag() != 0.0) return v;          // genuinely complex (NaN imag too)
@@ -1609,7 +1553,7 @@ Value narrowComplex(Value v, std::pmr::memory_resource *mr)
 
 // Shape rule: column vector source → column result; otherwise → row result.
 // CELL: always returns sub-cell (even for count==1), matching MATLAB c(i) semantics.
-Value Value::indexGet(const size_t *indices, size_t count, std::pmr::memory_resource *mr) const
+Value Value::indexGet(const size_t *indices, size_t count, keel::Allocator *mr) const
 {
     // For non-CELL scalar result, return a scalar value (narrow a complex
     // element whose imaginary part is zero — MATLAB: isreal(z(k)) per element).
@@ -1634,8 +1578,8 @@ Value Value::indexGet(const size_t *indices, size_t count, std::pmr::memory_reso
     case ValueType::COMPLEX: {
         auto result = Value::complexMatrix(rr, cc, mr);
         result.setSingleComplex(isSingleComplex());
-        Complex *dst = result.complexDataMut();
-        const Complex *src = complexData();
+        keel::c64 *dst = result.complexDataMut();
+        const keel::c64 *src = complexData();
         for (size_t i = 0; i < count; ++i)
             dst[i] = src[indices[i]];
         return narrowComplex(std::move(result), mr);   // all-real slice -> real
@@ -1717,7 +1661,7 @@ static inline size_t subIdx(const size_t *idx, size_t k) noexcept
 // 2D slice: extract sub-matrix at given row/col indices (nullptr = full 0..n-1).
 Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
                           const size_t *colIdx, size_t ncols,
-                          std::pmr::memory_resource *mr) const
+                          keel::Allocator *mr) const
 {
     // Scalar shortcut for non-CELL types
     if (nrows == 1 && ncols == 1 && type() != ValueType::CELL) {
@@ -1827,14 +1771,14 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
         return result;
     }
     if (t == ValueType::COMPLEX) {
-        const Complex *s = complexData();
-        Complex *out = result.complexDataMut();
+        const keel::c64 *s = complexData();
+        keel::c64 *out = result.complexDataMut();
         bool anyImag = false;
         for (size_t c = 0; c < ncols; ++c) {
-            const Complex *sc = s + subIdx(colIdx, c) * srcRows;
-            Complex *dc = out + c * nrows;
+            const keel::c64 *sc = s + subIdx(colIdx, c) * srcRows;
+            keel::c64 *dc = out + c * nrows;
             for (size_t r = 0; r < nrows; ++r) {
-                Complex v = sc[subIdx(rowIdx, r)];
+                keel::c64 v = sc[subIdx(rowIdx, r)];
                 dc[r] = v;
                 if (v.imag() != 0.0)
                     anyImag = true;
@@ -1856,7 +1800,7 @@ Value Value::indexGet2D(const size_t *rowIdx, size_t nrows,
 Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
                           const size_t *colIdx, size_t ncols,
                           const size_t *pageIdx, size_t npages,
-                          std::pmr::memory_resource *mr) const
+                          keel::Allocator *mr) const
 {
     // Scalar shortcut for non-CELL types
     if (nrows == 1 && ncols == 1 && npages == 1 && type() != ValueType::CELL) {
@@ -1951,7 +1895,7 @@ Value Value::indexGet3D(const size_t *rowIdx, size_t nrows,
 Value Value::indexGetND(const size_t *const *perDimIdx,
                           const size_t *perDimCount,
                           int nd,
-                          std::pmr::memory_resource *mr) const
+                          keel::Allocator *mr) const
 {
     if (nd <= 0) return Value();
     if (nd == 1) return indexGet(perDimIdx[0], perDimCount[0], mr);
@@ -2058,7 +2002,7 @@ Value Value::indexGetND(const size_t *const *perDimIdx,
 }
 
 // Logical indexing: extract elements where mask is true → row vector of same type.
-Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, std::pmr::memory_resource *mr) const
+Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, keel::Allocator *mr) const
 {
     // Check for true values beyond array bounds
     for (size_t i = numel(); i < maskLen; ++i)
@@ -2091,8 +2035,8 @@ Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, std::pmr::memory_
     case ValueType::COMPLEX: {
         auto result = Value::complexMatrix(rr, cc, mr);
         result.setSingleComplex(isSingleComplex());
-        Complex *dst = result.complexDataMut();
-        const Complex *src = complexData();
+        keel::c64 *dst = result.complexDataMut();
+        const keel::c64 *src = complexData();
         size_t k = 0;
         for (size_t i = 0; i < n; ++i)
             if (mask[i])
@@ -2188,9 +2132,9 @@ Value Value::logicalIndex(const uint8_t *mask, size_t maskLen, std::pmr::memory_
 // Index resolution — convert Value index to vector<size_t> (0-based)
 // ============================================================
 
-Size Value::checkedScalarIndex(double v)
+keel::usize Value::checkedScalarIndex(double v)
 {
-    Size out0 = 0;
+    keel::usize out0 = 0;
     if (!tryIndex0(v, out0))
         throw std::runtime_error(
             "Array indices must be positive integers or logical values.");
@@ -2214,7 +2158,7 @@ std::vector<size_t> Value::resolveIndices(const Value &idx, size_t dimSize)
             if (m[i])
                 out.push_back(i);
     } else if (idx.isDoubleScalar()) {
-        Size ii = Value::checkedScalarIndex(idx.toScalar());
+        keel::usize ii = Value::checkedScalarIndex(idx.toScalar());
         if (ii >= dimSize)
             throw std::runtime_error("Index exceeds array dimensions");
         out.push_back(ii);
@@ -2224,7 +2168,7 @@ std::vector<size_t> Value::resolveIndices(const Value &idx, size_t dimSize)
         // reads each generically (doubleData() throws "Not a double array" for
         // non-DOUBLE index arrays, e.g. A(int32([1 3]))).
         for (size_t i = 0; i < idx.numel(); ++i) {
-            Size ii = Value::checkedScalarIndex(idx.elemAsDouble(i));
+            keel::usize ii = Value::checkedScalarIndex(idx.elemAsDouble(i));
             if (ii >= dimSize)
                 throw std::runtime_error("Index exceeds array dimensions");
             out.push_back(ii);
@@ -2274,7 +2218,7 @@ static void writeElem(Value &dst, size_t idx, const Value &val, size_t valIdx)
         break;
     case ValueType::LOGICAL: {
         if (val.type() == ValueType::COMPLEX) // MATLAB errors; don't drop imag silently
-            throw std::runtime_error("Complex values cannot be converted to logicals.");
+            throw std::runtime_error("keel::c64 values cannot be converted to logicals.");
         double dv = val.elemAsDouble(valIdx);
         dst.logicalDataMut()[idx] = static_cast<uint8_t>(dv != 0.0);
         break;
@@ -2324,7 +2268,7 @@ static void writeScalar(Value &dst, size_t idx, const Value &val)
         break;
     case ValueType::LOGICAL:
         if (val.type() == ValueType::COMPLEX) // MATLAB errors; don't drop imag silently
-            throw std::runtime_error("Complex values cannot be converted to logicals.");
+            throw std::runtime_error("keel::c64 values cannot be converted to logicals.");
         dst.logicalDataMut()[idx] = static_cast<uint8_t>(val.toScalar() != 0.0);
         break;
     case ValueType::CHAR:
@@ -2405,11 +2349,11 @@ void Value::indexSet2D(const size_t *rowIdx, size_t nrows,
             return;
         }
         if (type() == ValueType::COMPLEX && nrows > 0 && ncols > 0) {
-            Complex *dst = complexDataMut();
-            const Complex sv = val.toComplex();
+            keel::c64 *dst = complexDataMut();
+            const keel::c64 sv = val.toComplex();
             const size_t dstRows = d.rows();
             for (size_t c = 0; c < ncols; ++c) {
-                Complex *dc = dst + subIdx(colIdx, c) * dstRows;
+                keel::c64 *dc = dst + subIdx(colIdx, c) * dstRows;
                 if (rowIdx == nullptr) {
                     std::fill_n(dc, nrows, sv);
                 } else {
@@ -2453,23 +2397,23 @@ void Value::indexSet2D(const size_t *rowIdx, size_t nrows,
             return;
         }
         if (type() == ValueType::COMPLEX && val.type() == ValueType::COMPLEX) {
-            Complex *dst = complexDataMut();
-            const Complex *src = val.complexData();
+            keel::c64 *dst = complexDataMut();
+            const keel::c64 *src = val.complexData();
             const size_t dstRows = d.rows();
             if (rowIdx == nullptr && nrows == dstRows && colIdx == nullptr && ncols == d.cols()) {
-                std::memcpy(dst, src, total * sizeof(Complex));
+                std::memcpy(dst, src, total * sizeof(keel::c64));
                 return;
             }
             if (rowIdx == nullptr) {
                 for (size_t c = 0; c < ncols; ++c)
                     std::memcpy(dst + subIdx(colIdx, c) * dstRows,
                                 src + c * nrows,
-                                nrows * sizeof(Complex));
+                                nrows * sizeof(keel::c64));
                 return;
             }
             size_t k = 0;
             for (size_t c = 0; c < ncols; ++c) {
-                Complex *dc = dst + subIdx(colIdx, c) * dstRows;
+                keel::c64 *dc = dst + subIdx(colIdx, c) * dstRows;
                 for (size_t r = 0; r < nrows; ++r)
                     dc[rowIdx[r]] = src[k++];
             }
@@ -2552,14 +2496,14 @@ void Value::indexSet3D(const size_t *rowIdx, size_t nrows,
             return;
         }
         if (type() == ValueType::COMPLEX && val.type() == ValueType::COMPLEX) {
-            Complex *dst = complexDataMut();
-            const Complex *src = val.complexData();
+            keel::c64 *dst = complexDataMut();
+            const keel::c64 *src = val.complexData();
             if (rowIdx == nullptr && nrows == d.rows() && colIdx == nullptr && ncols == d.cols()) {
                 const size_t pageElems = nrows * ncols;
                 for (size_t p = 0; p < npages; ++p)
                     std::memcpy(dst + d.sub2ind(0, 0, subIdx(pageIdx, p)),
                                 src + p * pageElems,
-                                pageElems * sizeof(Complex));
+                                pageElems * sizeof(keel::c64));
                 return;
             }
             if (rowIdx == nullptr) {
@@ -2568,7 +2512,7 @@ void Value::indexSet3D(const size_t *rowIdx, size_t nrows,
                     for (size_t c = 0; c < ncols; ++c)
                         std::memcpy(dst + d.sub2ind(0, subIdx(colIdx, c), sp),
                                     src + (p * ncols + c) * nrows,
-                                    nrows * sizeof(Complex));
+                                    nrows * sizeof(keel::c64));
                 }
                 return;
             }
@@ -2576,7 +2520,7 @@ void Value::indexSet3D(const size_t *rowIdx, size_t nrows,
             for (size_t p = 0; p < npages; ++p) {
                 const size_t sp = subIdx(pageIdx, p);
                 for (size_t c = 0; c < ncols; ++c) {
-                    Complex *dc = dst + d.sub2ind(0, subIdx(colIdx, c), sp);
+                    keel::c64 *dc = dst + d.sub2ind(0, subIdx(colIdx, c), sp);
                     for (size_t r = 0; r < nrows; ++r)
                         dc[rowIdx[r]] = src[k++];
                 }
@@ -2683,7 +2627,7 @@ void Value::indexSetND(const size_t *const *perDimIdx,
 // Type-preserving index deletion
 // ============================================================
 
-void Value::indexDelete(const size_t *indices, size_t count, std::pmr::memory_resource *mr)
+void Value::indexDelete(const size_t *indices, size_t count, keel::Allocator *mr)
 {
     ValueType t = type();
     // STRING elements are std::string, not fixed-width bytes, so the
@@ -2746,7 +2690,7 @@ void Value::indexDelete(const size_t *indices, size_t count, std::pmr::memory_re
 
 void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
                            const size_t *colIdx, size_t ncols,
-                           std::pmr::memory_resource *mr)
+                           keel::Allocator *mr)
 {
     ValueType t = type();
     // STRING elements are std::string, not fixed-width bytes, so the
@@ -2860,7 +2804,7 @@ void Value::indexDelete2D(const size_t *rowIdx, size_t nrows,
 void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
                            const size_t *colIdx, size_t ncols,
                            const size_t *pageIdx, size_t npages,
-                           std::pmr::memory_resource *mr)
+                           keel::Allocator *mr)
 {
     ValueType t = type();
     // STRING elements are std::string, not fixed-width bytes, so the
@@ -3000,7 +2944,7 @@ void Value::indexDelete3D(const size_t *rowIdx, size_t nrows,
 void Value::indexDeleteND(const size_t *const *perDimIdx,
                            const size_t *perDimCount,
                            int nd,
-                           std::pmr::memory_resource *mr)
+                           keel::Allocator *mr)
 {
     if (nd <= 0) return;
     if (nd == 1) { indexDelete(perDimIdx[0], perDimCount[0], mr); return; }
@@ -3107,23 +3051,23 @@ void Value::indexDeleteND(const size_t *const *perDimIdx,
     *this = std::move(result);
 }
 
-Value Value::complexScalar(Complex v, std::pmr::memory_resource *mr)
+Value Value::complexScalar(keel::c64 v, keel::Allocator *mr)
 {
     Value m;
     auto *h = new HeapObject();
     h->type = ValueType::COMPLEX;
     h->dims = {1, 1};
-    h->mr = mr;
-    h->buffer = new DataBuffer(sizeof(Complex), mr);
-    *static_cast<Complex *>(h->buffer->data()) = v;
+    h->alloc = mr;
+    h->buffer = new DataBuffer(sizeof(keel::c64), mr);
+    *static_cast<keel::c64 *>(h->buffer->data()) = v;
     m.heap_ = h;
     return m;
 }
-Value Value::complexScalar(double re, double im, std::pmr::memory_resource *mr)
+Value Value::complexScalar(double re, double im, keel::Allocator *mr)
 {
-    return complexScalar(Complex(re, im), mr);
+    return complexScalar(keel::c64(re, im), mr);
 }
-Value Value::complexMatrix(size_t rows, size_t cols, std::pmr::memory_resource *mr)
+Value Value::complexMatrix(size_t rows, size_t cols, keel::Allocator *mr)
 {
     return matrix(rows, cols, ValueType::COMPLEX, mr);
 }
@@ -3266,17 +3210,17 @@ ObjectState *Value::objectStateMutAt(size_t i)
 }
 
 Value Value::objectGather(const size_t *srcLinear, const Dims &resultDims,
-                          std::pmr::memory_resource *mr) const
+                          keel::Allocator *mr) const
 {
     if (!isObject())
         return Value();
     if (!mr)
-        mr = heap_->mr ? heap_->mr : std::pmr::get_default_resource();
+        mr = heap_->alloc ? heap_->alloc : keel::default_allocator();
     const bool handle = heap_->objIsHandle;
     const size_t n = resultDims.numel();
     auto *h = new HeapObject();
     h->type = ValueType::OBJECT;
-    h->mr = mr;
+    h->alloc = mr;
     h->objClass = new std::string(*heap_->objClass);
     h->objIsHandle = handle;
     h->dims = resultDims;
@@ -3295,7 +3239,7 @@ Value Value::objectGather(const size_t *srcLinear, const Dims &resultDims,
 }
 
 Value Value::objectSubArray(const std::vector<size_t> &idxs,
-                            std::pmr::memory_resource *mr) const
+                            keel::Allocator *mr) const
 {
     if (!isObject())
         return Value();
@@ -3305,7 +3249,7 @@ Value Value::objectSubArray(const std::vector<size_t> &idxs,
     return objectGather(idxs.data(), d, mr);
 }
 
-Value Value::objectReshape(const Dims &newDims, std::pmr::memory_resource *mr) const
+Value Value::objectReshape(const Dims &newDims, keel::Allocator *mr) const
 {
     if (!isObject())
         return Value();
@@ -3318,10 +3262,10 @@ Value Value::objectReshape(const Dims &newDims, std::pmr::memory_resource *mr) c
 }
 
 Value Value::objectConcatN(const Value *parts, size_t count, const Dims &outDims,
-                           std::pmr::memory_resource *mr)
+                           keel::Allocator *mr)
 {
     if (!mr)
-        mr = std::pmr::get_default_resource();
+        mr = keel::default_allocator();
     std::string clsName;
     bool found = false, handle = false;
     for (size_t i = 0; i < count; ++i) {
@@ -3346,7 +3290,7 @@ Value Value::objectConcatN(const Value *parts, size_t count, const Dims &outDims
     }
     auto *h = new HeapObject();
     h->type = ValueType::OBJECT;
-    h->mr = mr;
+    h->alloc = mr;
     h->objClass = new std::string(clsName);
     h->objIsHandle = handle;
     h->dims = outDims;
@@ -3361,7 +3305,7 @@ Value Value::objectConcatN(const Value *parts, size_t count, const Dims &outDims
     return out;
 }
 
-Value Value::objectTranspose(std::pmr::memory_resource *mr) const
+Value Value::objectTranspose(keel::Allocator *mr) const
 {
     if (!isObject())
         return Value();
@@ -3376,13 +3320,13 @@ Value Value::objectTranspose(std::pmr::memory_resource *mr) const
 
 // Make *this a fresh empty (0×0) object array of `proto`'s class, if it is
 // not already an object. Shared by the slice-assign entry points.
-void Value::objectEnsureArrayLike(const Value &proto, std::pmr::memory_resource *mr)
+void Value::objectEnsureArrayLike(const Value &proto, keel::Allocator *mr)
 {
     if (isObject())
         return;
     auto *h = new HeapObject();
     h->type = ValueType::OBJECT;
-    h->mr = mr;
+    h->alloc = mr;
     h->objClass = new std::string(proto.objectClassName());
     h->objIsHandle = proto.objectIsHandle();
     h->dims = Dims(size_t{0}, size_t{0}); // 0×0; `{0,0}` would pick the ptr ctor
@@ -3392,13 +3336,13 @@ void Value::objectEnsureArrayLike(const Value &proto, std::pmr::memory_resource 
 }
 
 void Value::objectAssignLinear(const std::vector<size_t> &pos, const Value &rhs,
-                               const Value &fill, std::pmr::memory_resource *mr)
+                               const Value &fill, keel::Allocator *mr)
 {
     if (!mr)
-        mr = (heap_ && heap_->mr) ? heap_->mr
-                                  : (rhs.heap_ && rhs.heap_->mr
-                                         ? rhs.heap_->mr
-                                         : std::pmr::get_default_resource());
+        mr = (heap_ && heap_->alloc) ? heap_->alloc
+                                  : (rhs.heap_ && rhs.heap_->alloc
+                                         ? rhs.heap_->alloc
+                                         : keel::default_allocator());
     objectEnsureArrayLike(rhs, mr);
     detach(); // HeapObject-level COW before in-place growth/store
     const bool handle = heap_->objIsHandle;
@@ -3443,13 +3387,13 @@ void Value::objectAssignLinear(const std::vector<size_t> &pos, const Value &rhs,
 
 void Value::objectAssignND(const std::vector<std::vector<size_t>> &perDim,
                            const Value &rhs, const Value &fill,
-                           std::pmr::memory_resource *mr)
+                           keel::Allocator *mr)
 {
     if (!mr)
-        mr = (heap_ && heap_->mr) ? heap_->mr
-                                  : (rhs.heap_ && rhs.heap_->mr
-                                         ? rhs.heap_->mr
-                                         : std::pmr::get_default_resource());
+        mr = (heap_ && heap_->alloc) ? heap_->alloc
+                                  : (rhs.heap_ && rhs.heap_->alloc
+                                         ? rhs.heap_->alloc
+                                         : keel::default_allocator());
     objectEnsureArrayLike(rhs, mr);
     detach();
     const bool handle = heap_->objIsHandle;
@@ -3644,7 +3588,7 @@ double Value::toScalar() const
     if (h->type == ValueType::DOUBLE && h->dims.isScalar())
         return *static_cast<const double *>(h->buffer->data());
     if (h->type == ValueType::COMPLEX && h->dims.isScalar()) {
-        auto c = *static_cast<const Complex *>(h->buffer->data());
+        auto c = *static_cast<const keel::c64 *>(h->buffer->data());
         if (c.imag() != 0.0)
             throw std::runtime_error(
                 "Cannot convert complex with nonzero imaginary part to double scalar");
@@ -3707,7 +3651,7 @@ bool Value::toBool() const
         return v != 0.0;
     }
     if (h->type == ValueType::COMPLEX && h->dims.isScalar() && h->buffer) {
-        auto c = *static_cast<const Complex *>(h->buffer->data());
+        auto c = *static_cast<const keel::c64 *>(h->buffer->data());
         if (std::isnan(c.real()) || std::isnan(c.imag()))
             nanErr();
         return c.real() != 0.0 || c.imag() != 0.0;
@@ -3733,7 +3677,7 @@ bool Value::toBool() const
         return n > 0;
     }
     if (h->type == ValueType::COMPLEX && h->buffer) {
-        const Complex *cd = static_cast<const Complex *>(h->buffer->data());
+        const keel::c64 *cd = static_cast<const keel::c64 *>(h->buffer->data());
         size_t n = h->dims.numel();
         bool hasZero = false;
         for (size_t i = 0; i < n; ++i) {
@@ -3821,40 +3765,40 @@ void Value::setFuncHandleCaptures(const Value *captures, size_t count)
     delete heap_->cellData;
     heap_->cellData = nullptr;
     if (count > 0 && captures) {
-        auto *cmr = heap_->mr ? heap_->mr : std::pmr::get_default_resource();
-        heap_->cellData = new std::pmr::vector<Value>(captures, captures + count, cmr);
+        auto *cmr = heap_->alloc ? heap_->alloc : keel::default_allocator();
+        heap_->cellData = new keel::Array<Value>(keel::ArrayRef<Value>(captures, count), cmr);
     }
 }
 
-const Complex *Value::complexData() const
+const keel::c64 *Value::complexData() const
 {
     if (!isHeap() || heap_->type != ValueType::COMPLEX)
         throw std::runtime_error("Not a complex array");
-    return heap_->buffer ? static_cast<const Complex *>(heap_->buffer->data()) : nullptr;
+    return heap_->buffer ? static_cast<const keel::c64 *>(heap_->buffer->data()) : nullptr;
 }
-Complex Value::toComplex() const
+keel::c64 Value::toComplex() const
 {
     if (heap_ == nullptr)
-        return Complex(scalar_, 0.0);
+        return keel::c64(scalar_, 0.0);
     if (heap_ == logicalTrueTag())
-        return Complex(1.0, 0.0);
+        return keel::c64(1.0, 0.0);
     if (heap_ == logicalFalseTag())
-        return Complex(0.0, 0.0);
+        return keel::c64(0.0, 0.0);
     if (!isHeap() || !heap_->buffer)
         throw std::runtime_error("Cannot convert to complex");
     if (heap_->type == ValueType::COMPLEX && heap_->dims.isScalar())
-        return *static_cast<const Complex *>(heap_->buffer->data());
+        return *static_cast<const keel::c64 *>(heap_->buffer->data());
     if (heap_->dims.isScalar() && (isNumeric() || isLogical() || isChar()))
-        return Complex(toScalar(), 0.0);
+        return keel::c64(toScalar(), 0.0);
     throw std::runtime_error("Cannot convert to complex");
 }
-Complex Value::complexElem(size_t i) const
+keel::c64 Value::complexElem(size_t i) const
 {
     if (i >= numel())
-        throw std::runtime_error("Complex index out of bounds");
+        throw std::runtime_error("keel::c64 index out of bounds");
     return complexData()[i];
 }
-Complex Value::complexElem(size_t r, size_t c) const
+keel::c64 Value::complexElem(size_t r, size_t c) const
 {
     return complexData()[dims().sub2indChecked(r, c)];
 }
@@ -3891,12 +3835,12 @@ void *Value::rawDataMut()
     detach();
     return heap_->buffer ? heap_->buffer->data() : nullptr;
 }
-Complex *Value::complexDataMut()
+keel::c64 *Value::complexDataMut()
 {
     if (!isHeap() || heap_->type != ValueType::COMPLEX)
         throw std::runtime_error("Not a complex array");
     detach();
-    return heap_->buffer ? static_cast<Complex *>(heap_->buffer->data()) : nullptr;
+    return heap_->buffer ? static_cast<keel::c64 *>(heap_->buffer->data()) : nullptr;
 }
 
 #define NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(CType, ConstFn, MutFn, VType, ErrLabel) \
@@ -3928,7 +3872,7 @@ NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(uint64_t, uint64Data, uint64DataMut, UINT64, 
 
 #undef NUMKIT_DEFINE_TYPED_DATA_ACCESSORS
 
-void Value::promoteToComplex(std::pmr::memory_resource *mr)
+void Value::promoteToComplex(keel::Allocator *mr)
 {
     ValueType t = type();
     if (t == ValueType::COMPLEX)
@@ -3938,25 +3882,25 @@ void Value::promoteToComplex(std::pmr::memory_resource *mr)
     size_t n = numel();
     if (heap_ == nullptr) {
         double v = scalar_;
-        *this = complexScalar(Complex(v, 0.0), mr);
+        *this = complexScalar(keel::c64(v, 0.0), mr);
         return;
     }
     if (!isHeap())
         throw std::runtime_error("Cannot promote to complex");
     detach(); // COW: ensure we have our own copy before mutating
     if (!mr)
-        mr = heap_->mr;
-    auto *newBuf = new DataBuffer(n * sizeof(Complex), mr);
-    Complex *dst = static_cast<Complex *>(newBuf->data());
+        mr = heap_->alloc;
+    auto *newBuf = new DataBuffer(n * sizeof(keel::c64), mr);
+    keel::c64 *dst = static_cast<keel::c64 *>(newBuf->data());
     if (n > 0 && heap_->buffer) {
         if (t == ValueType::SINGLE) {
             const float *src = static_cast<const float *>(heap_->buffer->data());
             for (size_t i = 0; i < n; ++i)
-                dst[i] = Complex(static_cast<double>(src[i]), 0.0);
+                dst[i] = keel::c64(static_cast<double>(src[i]), 0.0);
         } else {
             const double *src = static_cast<const double *>(heap_->buffer->data());
             for (size_t i = 0; i < n; ++i)
-                dst[i] = Complex(src[i], 0.0);
+                dst[i] = keel::c64(src[i], 0.0);
         }
     }
     if (heap_->buffer && heap_->buffer->release())
@@ -4025,14 +3969,14 @@ std::string Value::charRow(size_t r) const
     return s;
 }
 
-void Value::resize(size_t newRows, size_t newCols, std::pmr::memory_resource *mr)
+void Value::resize(size_t newRows, size_t newCols, keel::Allocator *mr)
 {
     if (heap_ == nullptr) {
         double v = scalar_;
         auto *h = new HeapObject();
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
-        h->mr = mr;
+        h->alloc = mr;
         h->buffer = new DataBuffer(sizeof(double), mr);
         *static_cast<double *>(h->buffer->data()) = v;
         heap_ = h;
@@ -4062,7 +4006,7 @@ void Value::resize(size_t newRows, size_t newCols, std::pmr::memory_resource *mr
     }
     detach();
     if (!mr)
-        mr = heap_->mr;
+        mr = heap_->alloc;
     const size_t oldR = heap_->dims.rows(), oldC = heap_->dims.cols();
     const size_t cr = std::min(oldR, newRows), cc = std::min(oldC, newCols);
     if (heap_->type == ValueType::CELL || heap_->type == ValueType::STRING) {
@@ -4086,10 +4030,10 @@ void Value::resize(size_t newRows, size_t newCols, std::pmr::memory_resource *mr
         if (heap_->structArray) {
             auto &dst = *grown.heap_->structArray;
             const auto &src = *heap_->structArray;
-            auto *cmr = mr ? mr : std::pmr::get_default_resource();
+            auto *cmr = mr ? mr : keel::default_allocator();
             for (size_t c = 0; c < cc; ++c)
                 for (size_t r = 0; r < cr; ++r)
-                    dst[c * newRows + r] = std::pmr::map<std::string, Value>(src[c * oldR + r], cmr);
+                    dst[c * newRows + r] = src[c * oldR + r];
             if (heap_->fieldOrder) {
                 for (size_t i = 0; i < dst.size(); ++i)
                     for (const auto &fn : *heap_->fieldOrder)
@@ -4120,12 +4064,12 @@ void Value::resize(size_t newRows, size_t newCols, std::pmr::memory_resource *mr
     if (heap_->buffer && heap_->buffer->release())
         delete heap_->buffer;
     heap_->buffer = nb2;
-    heap_->mr = mr;
+    heap_->alloc = mr;
     heap_->dims = {newRows, newCols};
     heap_->appendCapacity = 0;
 }
 
-void Value::resize3d(size_t nr, size_t nc, size_t np, std::pmr::memory_resource *mr)
+void Value::resize3d(size_t nr, size_t nc, size_t np, keel::Allocator *mr)
 {
     if (np <= 1 && (!isHeap() || heap_->dims.ndim() <= 2)) {
         resize(nr, nc, mr);
@@ -4136,7 +4080,7 @@ void Value::resize3d(size_t nr, size_t nc, size_t np, std::pmr::memory_resource 
         auto *h = new HeapObject();
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
-        h->mr = mr;
+        h->alloc = mr;
         h->buffer = new DataBuffer(sizeof(double), mr);
         *static_cast<double *>(h->buffer->data()) = v;
         heap_ = h;
@@ -4152,7 +4096,7 @@ void Value::resize3d(size_t nr, size_t nc, size_t np, std::pmr::memory_resource 
     }
     detach();
     if (!mr)
-        mr = heap_->mr;
+        mr = heap_->alloc;
     const size_t oR = heap_->dims.rows(), oC = heap_->dims.cols(),
                  oP = heap_->dims.dim(2);
     const size_t cr = std::min(oR, nr), cc = std::min(oC, nc), cp = std::min(oP, np);
@@ -4193,12 +4137,12 @@ void Value::resize3d(size_t nr, size_t nc, size_t np, std::pmr::memory_resource 
     if (heap_->buffer && heap_->buffer->release())
         delete heap_->buffer;
     heap_->buffer = nb2;
-    heap_->mr = mr;
+    heap_->alloc = mr;
     heap_->dims = (np <= 1) ? Dims{nr, nc} : Dims{nr, nc, np};
     heap_->appendCapacity = 0;
 }
 
-void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *mr)
+void Value::resizeND(const size_t *newDims, int nd, keel::Allocator *mr)
 {
     constexpr int kMaxNd = Dims::kMaxRank;
     if (nd <= 0 || nd > kMaxNd)
@@ -4214,7 +4158,7 @@ void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *m
         auto *h = new HeapObject();
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
-        h->mr = mr;
+        h->alloc = mr;
         h->buffer = new DataBuffer(sizeof(double), mr);
         *static_cast<double *>(h->buffer->data()) = v;
         heap_ = h;
@@ -4232,7 +4176,7 @@ void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *m
         *logicalDataMut() = lv ? 1 : 0;
     }
     detach();
-    if (!mr) mr = heap_->mr;
+    if (!mr) mr = heap_->alloc;
 
     const ValueType t = heap_->type;
     const Dims oldDims = heap_->dims;
@@ -4303,12 +4247,12 @@ void Value::resizeND(const size_t *newDims, int nd, std::pmr::memory_resource *m
     if (heap_->buffer && heap_->buffer->release())
         delete heap_->buffer;
     heap_->buffer = nb2;
-    heap_->mr = mr;
+    heap_->alloc = mr;
     heap_->dims = newD;
     heap_->appendCapacity = 0;
 }
 
-void Value::ensureSize(size_t idx, std::pmr::memory_resource *mr)
+void Value::ensureSize(size_t idx, keel::Allocator *mr)
 {
     if (heap_ == emptyTag() || heap_ == deletedTag() || (heap_ == nullptr && idx > 0)) {
         double old = (heap_ == nullptr) ? scalar_ : 0.0;
@@ -4329,20 +4273,20 @@ void Value::ensureSize(size_t idx, std::pmr::memory_resource *mr)
     }
 }
 
-void Value::appendScalar(double v, std::pmr::memory_resource *mr)
+void Value::appendScalar(double v, keel::Allocator *mr)
 {
     size_t oldN = numel(), newN = oldN + 1;
 
     // Empty → fresh 1-element heap double with headroom.
     if (isEmpty()) {
         if (!mr && isHeap())
-            mr = heap_->mr;
+            mr = heap_->alloc;
         releaseHeap();
         size_t cap = 8;
         std::unique_ptr<HeapObject> h(new HeapObject());
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
-        h->mr = mr;
+        h->alloc = mr;
         h->buffer = new DataBuffer(cap * sizeof(double), mr);
         h->appendCapacity = cap;
         double *d = static_cast<double *>(h->buffer->data());
@@ -4359,7 +4303,7 @@ void Value::appendScalar(double v, std::pmr::memory_resource *mr)
         auto *h = new HeapObject();
         h->type = ValueType::DOUBLE;
         h->dims = {1, newN};
-        h->mr = mr;
+        h->alloc = mr;
         h->buffer = new DataBuffer(cap * sizeof(double), mr);
         h->appendCapacity = cap;
         double *d = static_cast<double *>(h->buffer->data());
@@ -4373,7 +4317,7 @@ void Value::appendScalar(double v, std::pmr::memory_resource *mr)
         throw std::runtime_error("Cannot append");
     detach();
     if (!mr)
-        mr = heap_->mr;
+        mr = heap_->alloc;
     size_t cap = heap_->appendCapacity;
     if (!cap && heap_->buffer)
         cap = heap_->buffer->bytes() / sizeof(double);
@@ -4394,12 +4338,12 @@ void Value::appendScalar(double v, std::pmr::memory_resource *mr)
     if (heap_->buffer && heap_->buffer->release())
         delete heap_->buffer;
     heap_->buffer = nb;
-    heap_->mr = mr;
+    heap_->alloc = mr;
     heap_->dims = {1, newN};
     heap_->appendCapacity = nc;
 }
 
-void Value::appendScalarCol(double v, std::pmr::memory_resource *mr)
+void Value::appendScalarCol(double v, keel::Allocator *mr)
 {
     // Column twin of appendScalar: same buffer/growth mechanics, but the
     // dims stay {newN, 1} — a column vector grows DOWN, not right.
@@ -4407,13 +4351,13 @@ void Value::appendScalarCol(double v, std::pmr::memory_resource *mr)
 
     if (isEmpty()) {
         if (!mr && isHeap())
-            mr = heap_->mr;
+            mr = heap_->alloc;
         releaseHeap();
         size_t cap = 8;
         std::unique_ptr<HeapObject> h(new HeapObject());
         h->type = ValueType::DOUBLE;
         h->dims = {newN, 1};
-        h->mr = mr;
+        h->alloc = mr;
         h->buffer = new DataBuffer(cap * sizeof(double), mr);
         h->appendCapacity = cap;
         double *d = static_cast<double *>(h->buffer->data());
@@ -4428,7 +4372,7 @@ void Value::appendScalarCol(double v, std::pmr::memory_resource *mr)
         std::unique_ptr<HeapObject> h(new HeapObject());
         h->type = ValueType::DOUBLE;
         h->dims = {newN, 1};
-        h->mr = mr;
+        h->alloc = mr;
         h->buffer = new DataBuffer(cap * sizeof(double), mr);
         h->appendCapacity = cap;
         double *d = static_cast<double *>(h->buffer->data());
@@ -4442,7 +4386,7 @@ void Value::appendScalarCol(double v, std::pmr::memory_resource *mr)
         throw std::runtime_error("Cannot append");
     detach();
     if (!mr)
-        mr = heap_->mr;
+        mr = heap_->alloc;
     size_t cap = heap_->appendCapacity;
     if (!cap && heap_->buffer)
         cap = heap_->buffer->bytes() / sizeof(double);
@@ -4463,7 +4407,7 @@ void Value::appendScalarCol(double v, std::pmr::memory_resource *mr)
     if (heap_->buffer && heap_->buffer->release())
         delete heap_->buffer;
     heap_->buffer = nb;
-    heap_->mr = mr;
+    heap_->alloc = mr;
     heap_->appendCapacity = nc;
     heap_->dims = {newN, 1};
 }
@@ -4485,14 +4429,14 @@ const Value &Value::cellAt(size_t i) const
         throw std::runtime_error("Cell index out of bounds");
     return (*heap_->cellData)[i];
 }
-std::pmr::vector<Value> &Value::cellDataVec()
+keel::Array<Value> &Value::cellDataVec()
 {
     if (!isHeap() || !heap_->cellData)
         throw std::runtime_error("Not a cell");
     detach(); // COW
     return *heap_->cellData;
 }
-const std::pmr::vector<Value> &Value::cellDataVec() const
+const keel::Array<Value> &Value::cellDataVec() const
 {
     if (!isHeap() || !heap_->cellData)
         throw std::runtime_error("Not a cell");
@@ -4542,7 +4486,7 @@ bool Value::hasField(const std::string &n) const
     }
     return (*heap_->structArray)[0].count(n) > 0;
 }
-std::pmr::map<std::string, Value> &Value::structFields()
+std::map<std::string, Value> &Value::structFields()
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray
         || heap_->structArray->size() != 1)
@@ -4550,7 +4494,7 @@ std::pmr::map<std::string, Value> &Value::structFields()
     detach();
     return (*heap_->structArray)[0];
 }
-const std::pmr::map<std::string, Value> &Value::structFields() const
+const std::map<std::string, Value> &Value::structFields() const
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray
         || heap_->structArray->size() != 1)
@@ -4567,11 +4511,11 @@ bool Value::isStructArray() const
            && heap_->structArray->size() > 1;
 }
 
-void Value::growStructArrayTo(size_t idx, std::pmr::memory_resource *mr)
+void Value::growStructArrayTo(size_t idx, keel::Allocator *mr)
 {
     if (!mr) {
-        mr = (isHeap() && heap_->mr) ? heap_->mr
-                                      : std::pmr::get_default_resource();
+        mr = (isHeap() && heap_->alloc) ? heap_->alloc
+                                      : keel::default_allocator();
     }
     if (isEmpty() || !isHeap() || heap_->type != ValueType::STRUCT
         || !heap_->structArray) {
@@ -4589,25 +4533,24 @@ void Value::growStructArrayTo(size_t idx, std::pmr::memory_resource *mr)
     const size_t oldSize = heap_->structArray->size();
     heap_->dims = Dims(newRows, newCols);
     if (!heap_->fieldOrder)
-        heap_->fieldOrder = new std::pmr::vector<std::string>(mr);
+        heap_->fieldOrder = new std::vector<std::string>();
     if (newSize > heap_->structArray->capacity())
         heap_->structArray->reserve(std::max(newSize, heap_->structArray->capacity() * 2));
-    using MapT = std::pmr::map<std::string, Value>;
     for (size_t k = oldSize; k < newSize; ++k) {
-        heap_->structArray->emplace_back(MapT(mr));
+        heap_->structArray->emplace_back();
         auto &dst = heap_->structArray->back();
         for (const auto &fn : *heap_->fieldOrder)
             dst.try_emplace(fn, Value());
     }
 }
 size_t Value::growStructArrayND(const size_t *coords, int nd,
-                                std::pmr::memory_resource *mr)
+                                keel::Allocator *mr)
 {
     if (nd <= 0 || nd > Dims::kMaxRank)
         throw std::runtime_error("struct-array subscript rank out of range");
     if (!mr) {
-        mr = (isHeap() && heap_->mr) ? heap_->mr
-                                      : std::pmr::get_default_resource();
+        mr = (isHeap() && heap_->alloc) ? heap_->alloc
+                                      : keel::default_allocator();
     }
     if (isEmpty() || !isHeap() || heap_->type != ValueType::STRUCT
         || !heap_->structArray) {
@@ -4652,13 +4595,9 @@ size_t Value::growStructArrayND(const size_t *coords, int nd,
         auto *h = new HeapObject();
         h->type = ValueType::STRUCT;
         h->dims = Dims(need, newNd);
-        h->mr = mr;
-        using MapT = std::pmr::map<std::string, Value>;
-        h->structArray = new std::pmr::vector<MapT>(mr);
-        h->structArray->reserve(newTotal);
-        for (size_t i = 0; i < newTotal; ++i)
-            h->structArray->emplace_back(MapT(mr));
-        h->fieldOrder = new std::pmr::vector<std::string>(mr);
+        h->alloc = mr;
+        h->structArray = new std::vector<std::map<std::string, Value>>(newTotal);
+        h->fieldOrder = new std::vector<std::string>();
         grown.heap_ = h;
     }
     size_t oldStride[Dims::kMaxRank], newStride[Dims::kMaxRank];
@@ -4691,13 +4630,13 @@ size_t Value::growStructArrayND(const size_t *coords, int nd,
     return linearIn(need);
 }
 
-size_t Value::growCellTo(const size_t *coords, int nd, std::pmr::memory_resource *mr)
+size_t Value::growCellTo(const size_t *coords, int nd, keel::Allocator *mr)
 {
     if (nd <= 0 || nd > Dims::kMaxRank)
         throw std::runtime_error("cell subscript rank out of range");
     if (!mr) {
-        mr = (isHeap() && heap_->mr) ? heap_->mr
-                                      : std::pmr::get_default_resource();
+        mr = (isHeap() && heap_->alloc) ? heap_->alloc
+                                      : keel::default_allocator();
     }
     if (isUnset() || isEmpty())
         *this = Value::cell(0, 0, mr);
@@ -4765,7 +4704,7 @@ size_t Value::growCellTo(const size_t *coords, int nd, std::pmr::memory_resource
     *this = std::move(grown);
     return linearIn(dims());
 }
-std::pmr::map<std::string, Value> &Value::structArrayElem(size_t i)
+std::map<std::string, Value> &Value::structArrayElem(size_t i)
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         throw std::runtime_error("Not a struct");
@@ -4774,7 +4713,7 @@ std::pmr::map<std::string, Value> &Value::structArrayElem(size_t i)
     detach();
     return (*heap_->structArray)[i];
 }
-const std::pmr::map<std::string, Value> &Value::structArrayElem(size_t i) const
+const std::map<std::string, Value> &Value::structArrayElem(size_t i) const
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
         throw std::runtime_error("Not a struct");
@@ -4785,7 +4724,7 @@ const std::pmr::map<std::string, Value> &Value::structArrayElem(size_t i) const
 
 // ── BUG #15: insertion-order helpers ───────────────────────────
 namespace {
-inline void appendIfNew(std::pmr::vector<std::string> *order,
+inline void appendIfNew(std::vector<std::string> *order,
                          const std::string &name)
 {
     if (!order) return;
@@ -4879,7 +4818,7 @@ std::string Value::debugString() const
     }
     if (t == ValueType::COMPLEX && numel() <= 20 && numel() > 0 && isHeap() && heap_->buffer) {
         os << " = ";
-        const Complex *cd = complexData();
+        const keel::c64 *cd = complexData();
         if (isScalar()) {
             os << cd[0].real();
             if (cd[0].imag() >= 0)
@@ -4966,7 +4905,7 @@ static std::string fmtDouble(double v)
     return os.str();
 }
 
-static std::string fmtComplex(const Complex &c)
+static std::string fmtComplex(const keel::c64 &c)
 {
     std::ostringstream os;
     if (c.real() != 0.0 || c.imag() == 0.0)

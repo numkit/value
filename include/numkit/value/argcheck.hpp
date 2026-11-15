@@ -1,40 +1,23 @@
-// value/include/numkit/value/argcheck.hpp
+// include/numkit/value/argcheck.hpp
 //
 // numkit::argcheck — engine-free argument-validation primitives with
 // numkit-voiced diagnostics.
-//
-// Part of the explicit argcheck separation (dev-docs/todo/
-// argcheck_separation.md): reg adapters marshal, compute kernels
-// validate through <fn>_argcheck built on these primitives, so
-// interpreter and direct-C++ paths cross the same checks.
-//
-// Diagnostic policy (user rule 2026-09-17):
-//   * WHICH inputs are rejected (and which argument gets blamed) is
-//     validated against the reference engine — same inputs must fail
-//     with the same error class (behavior parity, full_fidelity.md);
-//   * the STRINGS are ours: identifiers use the numkit:<fn>:<tag>
-//     namespace, messages are more detailed than the reference's
-//     (function, argument, expectation, and the received value/shape).
-//     The reference's name or version never appears in shipped strings
-//     or code comments here.
-//   * a primitive joins this header only when a real consumer needs it
-//     (no speculative vocabulary).
 
 #pragma once
 
 #include <cassert>
 #include <cmath>
-#include <cstddef>
-#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
 
+#include <keel/math.h>
+#include <keel/ref.h>
+
 #include <numkit/value/error.hpp>
 #include <numkit/value/index.hpp>
-#include <numkit/value/span.hpp>
 #include <numkit/value/value.hpp>
-#include <numkit/value/value_type.hpp>   // mtypeName (class got-clauses)
+#include <numkit/value/value_type.hpp>
 
 namespace numkit::argcheck {
 
@@ -47,11 +30,11 @@ namespace detail {
 }
 
 // Value rendering for got-clauses: "2.5", "-5", "1e+30", "Inf", "NaN".
-inline std::string num(double v)
+inline std::string num(keel::f64 v)
 {
-    if (std::isnan(v))
+    if (keel::is_nan(v))
         return "NaN";
-    if (std::isinf(v))
+    if (keel::is_inf(v))
         return v > 0 ? "Inf" : "-Inf";
     std::ostringstream os;
     os << v;
@@ -63,7 +46,7 @@ inline std::string dimsStr(const Value &v)
 {
     const Dims &d = v.dims();
     std::string s = std::to_string(d.dim(0));
-    for (int k = 1; k < d.ndim(); ++k) {
+    for (keel::i32 k = 1; k < d.ndim(); ++k) {
         s += "x";
         s += std::to_string(d.dim(k));
     }
@@ -75,7 +58,7 @@ inline std::string dimsStr(const Value &v)
 // ============================================================
 // Arity.
 // ============================================================
-inline void checkNargin(size_t actual, size_t minArgs, std::string_view fn)
+inline void checkNargin(keel::usize actual, keel::usize minArgs, std::string_view fn)
 {
     if (actual < minArgs)
         detail::fail(std::string(fn) + ": not enough input arguments — at "
@@ -84,7 +67,7 @@ inline void checkNargin(size_t actual, size_t minArgs, std::string_view fn)
                      fn, "numkit:" + std::string(fn) + ":nargin");
 }
 
-inline void checkNargin(size_t actual, size_t minArgs, size_t maxArgs,
+inline void checkNargin(keel::usize actual, keel::usize minArgs, keel::usize maxArgs,
                         std::string_view fn)
 {
     checkNargin(actual, minArgs, fn);
@@ -98,18 +81,11 @@ inline void checkNargin(size_t actual, size_t minArgs, size_t maxArgs,
 // ============================================================
 // Array-creation size inputs (zeros/ones/eye/true/false/inf/nan/
 // rand/randn/randi/strings).
-//
-// Reference-probed contract (2026-09-16): a negative integer size
-// CLAMPS to an empty array (zeros(-1,3) -> 0x3); NaN/Inf, fractional,
-// non-scalar and complex size inputs are each rejected as their own
-// error class.
 // ============================================================
 
-// Numeric tail — use when the Value-level checks are already done (e.g.
-// looping over the elements of a [m n p] size vector).
-inline Size arrayDim(double d, std::string_view fn)
+inline keel::usize arrayDim(keel::f64 d, std::string_view fn)
 {
-    if (std::isnan(d) || std::isinf(d))
+    if (keel::is_nan(d) || keel::is_inf(d))
         detail::fail(std::string(fn) + ": size inputs must be finite (got "
                      + detail::num(d) + ").",
                      fn, "numkit:" + std::string(fn) + ":sizeNotFinite");
@@ -119,7 +95,7 @@ inline Size arrayDim(double d, std::string_view fn)
                      fn, "numkit:" + std::string(fn) + ":sizeNotInteger");
     if (d < 0.0)
         return 0;
-    Size out = 0;
+    keel::usize out = 0;
     if (!tryNonNegSize(d, out))
         detail::fail(std::string(fn) + ": requested array size exceeds the "
                      "supported maximum (got " + detail::num(d) + ").",
@@ -127,8 +103,6 @@ inline Size arrayDim(double d, std::string_view fn)
     return out;
 }
 
-// Realness guard for a size input of ANY shape (scalar or [m n p]
-// vector) — shared by the scalar and vector parsing forms.
 inline void arrayDimReal(const Value &v, std::string_view fn)
 {
     if (v.isComplex())
@@ -137,10 +111,7 @@ inline void arrayDimReal(const Value &v, std::string_view fn)
                      fn, "numkit:" + std::string(fn) + ":sizeNotReal");
 }
 
-// Whole-argument form — scalar/real checks first (a complex SCALAR is
-// isScalar()==true, so the complex check must come second to blame
-// realness, not shape), then the numeric tail.
-inline size_t arrayDim(const Value &v, std::string_view fn)
+inline keel::usize arrayDim(const Value &v, std::string_view fn)
 {
     if (!v.isScalar())
         detail::fail(std::string(fn) + ": size inputs must be scalars "
@@ -152,13 +123,8 @@ inline size_t arrayDim(const Value &v, std::string_view fn)
 
 // ============================================================
 // reshape size inputs.
-//
-// Reference-probed contract (2026-09-16/17): reshape REJECTS what the
-// creation family tolerates — negative and fractional sizes are each
-// their own error class, and the negative check fires first.
 // ============================================================
 
-// Realness guard for a reshape size input of ANY shape.
 inline void reshapeSizeReal(const Value &v, std::string_view fn)
 {
     if (v.isComplex())
@@ -167,10 +133,7 @@ inline void reshapeSizeReal(const Value &v, std::string_view fn)
                      fn, "numkit:" + std::string(fn) + ":sizeNotReal");
 }
 
-// Value-level extraction for one scalar size position. The caller checks
-// for [] inference (an empty argument) BEFORE calling — empties never
-// reach this function.
-inline double reshapeSizeArg(const Value &v, std::string_view fn)
+inline keel::f64 reshapeSizeArg(const Value &v, std::string_view fn)
 {
     if (!v.isScalar())
         detail::fail(std::string(fn) + ": size inputs must be scalars "
@@ -180,19 +143,17 @@ inline double reshapeSizeArg(const Value &v, std::string_view fn)
     return v.toScalar();
 }
 
-inline Size reshapeSize(double d, std::string_view fn)
+inline keel::usize reshapeSize(keel::f64 d, std::string_view fn)
 {
     if (d < 0.0)
         detail::fail(std::string(fn) + ": size inputs must be non-negative "
                      "(got " + detail::num(d) + ").",
                      fn, "numkit:" + std::string(fn) + ":sizeNegative");
-    if (std::isnan(d) || std::isinf(d) || d != std::floor(d))
+    if (keel::is_nan(d) || keel::is_inf(d) || d != std::floor(d))
         detail::fail(std::string(fn) + ": size inputs must be real "
                      "integers (got " + detail::num(d) + ").",
                      fn, "numkit:" + std::string(fn) + ":sizeNotInteger");
-    // Cast-safety guard only (the numel-preservation check in reshape
-    // catches unrealistic sizes first).
-    Size out = 0;
+    keel::usize out = 0;
     if (!tryNonNegSize(d, out))
         detail::fail(std::string(fn) + ": requested array size exceeds the "
                      "supported maximum (got " + detail::num(d) + ").",
@@ -202,14 +163,10 @@ inline Size reshapeSize(double d, std::string_view fn)
 
 // ============================================================
 // Named-scalar extraction ("input <k> (<name>) must be …").
-// The richer twin of the reference's validateattributes family: the
-// message names the position, the argument, the expectation AND the
-// received value/shape.
 // ============================================================
 
-// Extract a real scalar. argNum/argName name the input position.
-inline double expectedReal(const Value &v, int argNum,
-                           std::string_view argName, std::string_view fn)
+inline keel::f64 expectedReal(const Value &v, keel::i32 argNum,
+                              std::string_view argName, std::string_view fn)
 {
     const std::string id = "numkit:" + std::string(fn) + ":"
                            + std::string(argName);
@@ -226,9 +183,7 @@ inline double expectedReal(const Value &v, int argNum,
     return v.toScalar();
 }
 
-// Domain check on an already-extracted value. `!(v > 0)` so NaN is
-// rejected here too.
-inline void expectedPositive(double v, int argNum, std::string_view argName,
+inline void expectedPositive(keel::f64 v, keel::i32 argNum, std::string_view argName,
                              std::string_view fn)
 {
     if (!(v > 0.0))
@@ -240,20 +195,12 @@ inline void expectedPositive(double v, int argNum, std::string_view argName,
 }
 
 // ============================================================
-// Dimension arguments — the dim=2 / vecdim inputs of the reduction
-// families (bounds, iqr, median, mode, moment, trimmean, range,
-// geomean, harmmean, mad, zscore …).
-//
-// Reference-probed contract (2026-09-17): a positive integer scalar
-// (fractional / zero / negative are all rejected); vecdim entries carry
-// the same per-element contract plus the caller's range check.
+// Dimension arguments.
 // ============================================================
 
-// Numeric tail — use when the Value-level checks are already done (e.g.
-// looping over the elements of a vecdim vector).
-inline int dimArg(double d, std::string_view fn)
+inline keel::i32 dimArg(keel::f64 d, std::string_view fn)
 {
-    if (std::isnan(d) || std::isinf(d))
+    if (keel::is_nan(d) || keel::is_inf(d))
         detail::fail(std::string(fn) + ": dimension argument must be finite "
                      "(got " + detail::num(d) + ").",
                      fn, "numkit:" + std::string(fn) + ":dimNotFinite");
@@ -265,17 +212,14 @@ inline int dimArg(double d, std::string_view fn)
         detail::fail(std::string(fn) + ": dimension argument must be a "
                      "positive integer (got " + detail::num(d) + ").",
                      fn, "numkit:" + std::string(fn) + ":dimNotPositive");
-    if (d > static_cast<double>(std::numeric_limits<int>::max()))
+    if (d > static_cast<keel::f64>(keel::Limits<keel::i32>::kMax))
         detail::fail(std::string(fn) + ": dimension argument exceeds maximum "
                      "supported rank (got " + detail::num(d) + ").",
                      fn, "numkit:" + std::string(fn) + ":dimTooLarge");
-    return static_cast<int>(d);
+    return static_cast<keel::i32>(d);
 }
 
-// Whole-argument form — scalar / real checks first (a complex SCALAR is
-// isScalar()==true, so the complex check must come second to blame
-// realness, not shape), then the numeric tail.
-inline int dimArg(const Value &v, std::string_view fn)
+inline keel::i32 dimArg(const Value &v, std::string_view fn)
 {
     if (!v.isScalar())
         detail::fail(std::string(fn) + ": dimension argument must be a "
@@ -289,33 +233,29 @@ inline int dimArg(const Value &v, std::string_view fn)
 }
 
 // ============================================================
-// Named integer-valued scalar inputs (k, order, NumLags, …) and 0/1
-// flags. Integer-ness is one class; the sign policy is the caller's
-// separate check (k and order are NON-negative — 0 is legal; NumLags is
-// positive; cov/var/mad/zscore flags are exactly 0 or 1).
-// Reference-probed 2026-09-17.
+// Named integer-valued scalar inputs and 0/1 flags.
 // ============================================================
 
-inline int expectedInteger(double v, int argNum, std::string_view argName,
-                           std::string_view fn)
+inline keel::i32 expectedInteger(keel::f64 v, keel::i32 argNum, std::string_view argName,
+                                 std::string_view fn)
 {
-    if (std::isnan(v) || std::isinf(v) || v != std::floor(v))
+    if (keel::is_nan(v) || keel::is_inf(v) || v != std::floor(v))
         detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
                          + " (" + std::string(argName) + ") must be an "
                          "integer (got " + detail::num(v) + ").",
                      fn, "numkit:" + std::string(fn) + ":"
                          + std::string(argName) + "NotInteger");
-    if (v < static_cast<double>(std::numeric_limits<int>::min())
-        || v > static_cast<double>(std::numeric_limits<int>::max()))
+    if (v < static_cast<keel::f64>(keel::Limits<keel::i32>::kMin)
+        || v > static_cast<keel::f64>(keel::Limits<keel::i32>::kMax))
         detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
                          + " (" + std::string(argName) + ") exceeds integer "
                          "range (got " + detail::num(v) + ").",
                      fn, "numkit:" + std::string(fn) + ":"
                          + std::string(argName) + "OutOfRange");
-    return static_cast<int>(v);
+    return static_cast<keel::i32>(v);
 }
 
-inline void expectedNonNegative(double v, int argNum, std::string_view argName,
+inline void expectedNonNegative(keel::f64 v, keel::i32 argNum, std::string_view argName,
                                 std::string_view fn)
 {
     if (v < 0.0)
@@ -326,7 +266,7 @@ inline void expectedNonNegative(double v, int argNum, std::string_view argName,
                          + std::string(argName) + "NotNegative");
 }
 
-inline void expectedFlag01(double v, int argNum, std::string_view argName,
+inline void expectedFlag01(keel::f64 v, keel::i32 argNum, std::string_view argName,
                            std::string_view fn)
 {
     expectedInteger(v, argNum, argName, fn);
@@ -338,21 +278,16 @@ inline void expectedFlag01(double v, int argNum, std::string_view argName,
                          + std::string(argName) + "Not01");
 }
 
-// The dominant count/order family (k, order, window, span, level, N …):
-// positive integer. Integer-ness fires first, so 2.5 reports NotInteger
-// and -3 reports NotPositive — same rejection classes as the reference's
-// "must be a positive integer", split into richer numkit-voiced diagnostics.
-inline int expectedPositiveInteger(double v, int argNum, std::string_view argName,
-                                   std::string_view fn)
+inline keel::i32 expectedPositiveInteger(keel::f64 v, keel::i32 argNum,
+                                         std::string_view argName,
+                                         std::string_view fn)
 {
-    const int i = expectedInteger(v, argNum, argName, fn);
+    const keel::i32 i = expectedInteger(v, argNum, argName, fn);
     expectedPositive(v, argNum, argName, fn);
     return i;
 }
 
-// Inclusive range check on an already-extracted value. `lo`/`hi` are
-// included on both ends; NaN fails (comparison with itself).
-inline void expectedBetween(double v, double lo, double hi, int argNum,
+inline void expectedBetween(keel::f64 v, keel::f64 lo, keel::f64 hi, keel::i32 argNum,
                             std::string_view argName, std::string_view fn)
 {
     if (!(v >= lo && v <= hi))
@@ -364,20 +299,16 @@ inline void expectedBetween(double v, double lo, double hi, int argNum,
                          + std::string(argName) + "OutOfRange");
 }
 
-// Numeric choice set — connectivity {4,8} / {6,18,26}, bit depths
-// {8,10,12,16}, LUT sizes {2,3} … Integer-ness first (2.5 reports
-// NotInteger), then membership. Reference-probed (2026-09-17):
-// connectivity 5 / 2.5 / 0 are all rejected as one class.
-inline int expectedOneOf(double v, std::initializer_list<double> choices,
-                         int argNum, std::string_view argName,
-                         std::string_view fn)
+inline keel::i32 expectedOneOf(keel::f64 v, std::initializer_list<keel::f64> choices,
+                               keel::i32 argNum, std::string_view argName,
+                               std::string_view fn)
 {
     expectedInteger(v, argNum, argName, fn);
-    for (double c : choices)
+    for (keel::f64 c : choices)
         if (v == c)
-            return static_cast<int>(v);
+            return static_cast<keel::i32>(v);
     std::string list;
-    for (double c : choices) {
+    for (keel::f64 c : choices) {
         if (!list.empty())
             list += ", ";
         list += detail::num(c);
@@ -389,36 +320,27 @@ inline int expectedOneOf(double v, std::initializer_list<double> choices,
                      + std::string(argName) + "NotChoice");
 }
 
-// Length inputs whose reference ROUNDS a fractional value with a warning
-// instead of rejecting (probed 2026-09-17: hamming(2.5) -> length 3,
-// lpc(x, 2.5) rounds) — rejection parity therefore REQUIRES accepting
-// them here too. Real check, round half away from zero, then the
-// negative class (hamming(-1) errors as nonnegative).
-inline size_t roundLength(const Value &v, int argNum, std::string_view argName,
-                          std::string_view fn)
+inline keel::usize roundLength(const Value &v, keel::i32 argNum, std::string_view argName,
+                               std::string_view fn)
 {
-    const double d = expectedReal(v, argNum, argName, fn);
-    const double r = std::floor(d + 0.5);
+    const keel::f64 d = expectedReal(v, argNum, argName, fn);
+    const keel::f64 r = std::floor(d + 0.5);
     if (!(r >= 0.0))
         detail::fail(std::string(fn) + ": input " + std::to_string(argNum)
                          + " (" + std::string(argName) + ") must be "
                          "non-negative (got " + detail::num(d) + ").",
                      fn, "numkit:" + std::string(fn) + ":"
                          + std::string(argName) + "NotNegative");
-    return static_cast<size_t>(r);
+    return static_cast<keel::usize>(r);
 }
 
 // ============================================================
-// String-valued option inputs: one of a fixed choice set
-// ('WidthReference' → 'halfprom'|'halfheight', SortStr, criteria,
-// methods …). Case-insensitive; returns the matched index. Unifies the
-// hand-rolled lowercase-loop + switch + throw blocks the option parsers
-// used to copy around.
+// String-valued option inputs: one of a fixed choice set.
 // ============================================================
-inline size_t expectedChoice(const Value &v,
-                             std::initializer_list<std::string_view> choices,
-                             int argNum, std::string_view argName,
-                             std::string_view fn)
+inline keel::usize expectedChoice(const Value &v,
+                                  std::initializer_list<std::string_view> choices,
+                                  keel::i32 argNum, std::string_view argName,
+                                  std::string_view fn)
 {
     auto describe = [&]() -> std::string {
         if (v.isChar() || v.isString())
@@ -430,8 +352,8 @@ inline size_t expectedChoice(const Value &v,
     if (v.isChar() || v.isString()) {
         std::string s = v.toString();
         for (char &c : s)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        size_t idx = 0;
+            c = keel::detail::to_ascii_lower(c);
+        keel::usize idx = 0;
         for (std::string_view c : choices) {
             if (s == c)
                 return idx;
@@ -453,32 +375,46 @@ inline size_t expectedChoice(const Value &v,
                      + std::string(argName) + "NotChoice");
 }
 
-
 // ============================================================
-// String choice — validatestring (prefix) semantics.
-//
-// expectedChoice above requires the EXACT (case-insensitive) string.
-// The reference's method/flag parsers use validatestring: an exact
-// match wins, otherwise a UNIQUE case-insensitive prefix. This probe
-// owns the lowercasing (boundary rule: callers pass the RAW value).
+// String choice — prefix-matching semantics.
 // Return codes: >=0 matched index; -1 no match; -2 ambiguous prefix.
-// An empty string matches nothing unless it is the single choice.
 // ============================================================
-inline int matchStringChoice(const Value &name,
-                             Span<const std::string_view> choices)
+inline keel::i32 matchStringChoice(const Value &name,
+                                   keel::ArrayRef<std::string_view> choices)
 {
     std::string s = name.toString();
     for (char &c : s)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    for (std::size_t i = 0; i < choices.size(); ++i)
+        c = keel::detail::to_ascii_lower(c);
+    for (keel::usize i = 0; i < choices.size(); ++i)
         if (s == choices[i])
-            return static_cast<int>(i);
-    int hit = -1;
-    for (std::size_t i = 0; i < choices.size(); ++i) {
+            return static_cast<keel::i32>(i);
+    keel::i32 hit = -1;
+    for (keel::usize i = 0; i < choices.size(); ++i) {
         if (choices[i].rfind(s, 0) == 0) {
             if (hit >= 0)
                 return -2;
-            hit = static_cast<int>(i);
+            hit = static_cast<keel::i32>(i);
+        }
+    }
+    return hit;
+}
+
+inline keel::i32 matchStringChoice(const Value &name,
+                                   keel::ArrayRef<keel::StringRef> choices)
+{
+    std::string s = name.toString();
+    for (char &c : s)
+        c = keel::detail::to_ascii_lower(c);
+    const keel::StringRef sr(s);
+    for (keel::usize i = 0; i < choices.size(); ++i)
+        if (choices[i] == sr)
+            return static_cast<keel::i32>(i);
+    keel::i32 hit = -1;
+    for (keel::usize i = 0; i < choices.size(); ++i) {
+        if (choices[i].starts_with(sr)) {
+            if (hit >= 0)
+                return -2;
+            hit = static_cast<keel::i32>(i);
         }
     }
     return hit;
@@ -486,40 +422,12 @@ inline int matchStringChoice(const Value &name,
 
 // ============================================================
 // Class-set gates — the accepted-array-class contract.
-//
-// The reference's type matrix is PER-FUNCTION inconsistent (probed
-// per family: one entry takes single+double, its sibling rejects
-// logical, another coerces char — see the family portions in
-// dev-docs/todo/argcheck_separation.md). So the MECHANISM lives here
-// (parameterized by a mask) and the PROBED masks stay in each
-// family's detail header next to the tests that pin them.
-//
-// Preconditions / invariants:
-//   * the class is read via type() ONLY — never through element
-//     readers (the linalg lesson: dispatch predicates must not touch
-//     data);
-//   * the Cpx bit test is exact because the engine collapses a +0i
-//     imaginary part to REAL storage, so type()==COMPLEX means a
-//     nonzero imaginary part is present (if that collapse invariant
-//     ever changes, this gate changes meaning — single-complex
-//     storage is bugs/opened/core/single-complex-storage.md);
-//   * ordering: this class gate runs BEFORE any extraction primitive
-//     (it is the cheapest check and owns the type-blaming);
-//   * empty masks are a programming error (assert in debug builds).
-//
-// Voice policy: the DEFAULTS are the parity voices (the reference
-// itself rejects the class). A family whose KERNEL cannot compute a
-// class the reference accepts (honest capability gap, e.g. single
-// where the kernel is double-only — bugs/opened/linalg/
-// single-float-inputs.md) overrides singleRejected with its gap id;
-// that override must carry a filed bug. complexRejected defaults to
-// the expectedReal class the reference's validators use.
 // ============================================================
 
-enum Class : uint32_t {
+enum Class : keel::u32 {
     ClsDbl = 1u << 0,
     ClsSgl = 1u << 1,
-    ClsCpx = 1u << 2,   // complex storage (double-complex; see invariant above)
+    ClsCpx = 1u << 2,
     ClsI8  = 1u << 3,
     ClsI16 = 1u << 4,
     ClsI32 = 1u << 5,
@@ -532,44 +440,40 @@ enum Class : uint32_t {
     ClsChr = 1u << 12,
 };
 
-// Strong mask type: bitwise combinable, not accidentally an int.
-enum class ClassMask : uint32_t {};
+enum class ClassMask : keel::u32 {};
 constexpr ClassMask operator|(ClassMask a, ClassMask b)
 {
-    return static_cast<ClassMask>(static_cast<uint32_t>(a)
-                                  | static_cast<uint32_t>(b));
+    return static_cast<ClassMask>(static_cast<keel::u32>(a)
+                                  | static_cast<keel::u32>(b));
 }
 constexpr bool maskAccepts(ClassMask m, Class c)
 {
-    return (static_cast<uint32_t>(m) & static_cast<uint32_t>(c)) != 0;
+    return (static_cast<keel::u32>(m) & static_cast<keel::u32>(c)) != 0;
 }
 constexpr ClassMask classMaskOf(Class c) { return static_cast<ClassMask>(c); }
 
-// The single mapping point ValueType -> Class bit. One switch, tested.
 inline Class classBitOf(ValueType t)
 {
     switch (t) {
-    case ValueType::DOUBLE: return ClsDbl;
-    case ValueType::SINGLE: return ClsSgl;
+    case ValueType::DOUBLE:  return ClsDbl;
+    case ValueType::SINGLE:  return ClsSgl;
     case ValueType::COMPLEX: return ClsCpx;
-    case ValueType::INT8:   return ClsI8;
-    case ValueType::INT16:  return ClsI16;
-    case ValueType::INT32:  return ClsI32;
-    case ValueType::INT64:  return ClsI64;
-    case ValueType::UINT8:  return ClsU8;
-    case ValueType::UINT16: return ClsU16;
-    case ValueType::UINT32: return ClsU32;
-    case ValueType::UINT64: return ClsU64;
+    case ValueType::INT8:    return ClsI8;
+    case ValueType::INT16:   return ClsI16;
+    case ValueType::INT32:   return ClsI32;
+    case ValueType::INT64:   return ClsI64;
+    case ValueType::UINT8:   return ClsU8;
+    case ValueType::UINT16:  return ClsU16;
+    case ValueType::UINT32:  return ClsU32;
+    case ValueType::UINT64:  return ClsU64;
     case ValueType::LOGICAL: return ClsLog;
-    case ValueType::CHAR:   return ClsChr;
+    case ValueType::CHAR:    return ClsChr;
     default: break;
     }
     return static_cast<Class>(0);
 }
 
 struct RejectionVoice {
-    // Parity defaults; singleRejected empty -> falls back to notAccepted
-    // (override ONLY for kernel capability gaps with a filed bug).
     std::string_view notAccepted = "invalidType";
     std::string_view complexRejected = "expectedReal";
     std::string_view singleRejected = "";
@@ -580,7 +484,7 @@ inline void requireClassSet(const Value &x, ClassMask accept,
                             std::string_view argName = "A",
                             const RejectionVoice &voice = {})
 {
-    assert(static_cast<uint32_t>(accept) != 0 && "empty class mask");
+    assert(static_cast<keel::u32>(accept) != 0 && "empty class mask");
     const Class c = classBitOf(x.type());
     if (maskAccepts(accept, c))
         return;
@@ -605,38 +509,54 @@ inline void requireClassSet(const Value &x, ClassMask accept,
                      + std::string(voice.notAccepted));
 }
 
-
 // ============================================================
 // Name-value tail walker.
-//
-// The last shared pattern of the option parsers: walk (name, value)
-// pairs over a raw tail, validate the pair parity and the name
-// (prefix semantics of matchStringChoice), and hand each matched
-// (nameIdx, value) to the caller's dispatch lambda. Callers keep
-// their per-name domain validation. Unknown names and odd tails are
-// voiced here with the caller's tag.
 // ============================================================
 template <typename F>
-void forEachNvPair(Span<const Value> in, std::size_t start,
-                   Span<const std::string_view> names,
+void forEachNvPair(keel::ArrayRef<Value> in, keel::usize start,
+                   keel::ArrayRef<std::string_view> names,
                    std::string_view fn, std::string_view tag, F &&dispatch)
 {
     if ((in.size() - start) % 2 != 0)
         detail::fail(std::string(fn) + ": each parameter name needs a "
                      "value (unmatched value in the name-value list).",
                      fn, "numkit:" + std::string(fn) + ":nvMismatch");
-    for (std::size_t i = start; i + 1 < in.size(); i += 2) {
+    for (keel::usize i = start; i + 1 < in.size(); i += 2) {
         const Value &name = in[i];
         if (!(name.isChar() || name.isString()))
             detail::fail(std::string(fn) + ": expected a parameter name "
                          "(unmatched value in the name-value list).",
                          fn, "numkit:" + std::string(fn) + ":nvMismatch");
-        const int hit = matchStringChoice(name, names);
+        const keel::i32 hit = matchStringChoice(name, names);
         if (hit < 0)
             detail::fail(std::string(fn) + ": unrecognized parameter "
                          "name '" + name.toString() + "'.",
                          fn, std::string(tag));
-        dispatch(static_cast<std::size_t>(hit), in[i + 1]);
+        dispatch(static_cast<keel::usize>(hit), in[i + 1]);
+    }
+}
+
+template <typename F>
+void forEachNvPair(keel::ArrayRef<Value> in, keel::usize start,
+                   keel::ArrayRef<keel::StringRef> names,
+                   std::string_view fn, std::string_view tag, F &&dispatch)
+{
+    if ((in.size() - start) % 2 != 0)
+        detail::fail(std::string(fn) + ": each parameter name needs a "
+                     "value (unmatched value in the name-value list).",
+                     fn, "numkit:" + std::string(fn) + ":nvMismatch");
+    for (keel::usize i = start; i + 1 < in.size(); i += 2) {
+        const Value &name = in[i];
+        if (!(name.isChar() || name.isString()))
+            detail::fail(std::string(fn) + ": expected a parameter name "
+                         "(unmatched value in the name-value list).",
+                         fn, "numkit:" + std::string(fn) + ":nvMismatch");
+        const keel::i32 hit = matchStringChoice(name, names);
+        if (hit < 0)
+            detail::fail(std::string(fn) + ": unrecognized parameter "
+                         "name '" + name.toString() + "'.",
+                         fn, std::string(tag));
+        dispatch(static_cast<keel::usize>(hit), in[i + 1]);
     }
 }
 

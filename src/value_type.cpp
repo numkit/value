@@ -34,7 +34,7 @@ const char *mtypeName(ValueType t)
     return "unknown";
 }
 
-size_t elementSize(ValueType t)
+keel::usize elementSize(ValueType t)
 {
     switch (t) {
     case ValueType::DOUBLE:  return 8;

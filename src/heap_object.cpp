@@ -3,8 +3,6 @@
 #include <numkit/value/object.hpp>
 #include <numkit/value/value.hpp>
 
-#include <cstring>
-
 namespace numkit {
 
 HeapObject::~HeapObject()
@@ -19,7 +17,6 @@ HeapObject::~HeapObject()
     delete funcName;
     delete funcSource;
     delete objClass;
-    // objStates holds shared_ptrs in a vector — released automatically.
 }
 
 HeapObject *HeapObject::clone() const
@@ -27,51 +24,37 @@ HeapObject *HeapObject::clone() const
     auto *h = new HeapObject();
     h->type = type;
     h->dims = dims;
-    h->mr = mr;
+    h->alloc = alloc;
     h->isSingleComplex = isSingleComplex;
-    // pmr containers require a non-null memory_resource. For matrix /
-    // scalar / etc. cellData/structData are null and `mr` may be null
-    // (legacy "engine-free" paths); for cell/struct/string the factory
-    // already maps null → get_default_resource(), so we mirror that here
-    // to keep the contract symmetric.
-    auto *cmr = mr ? mr : std::pmr::get_default_resource();
+    keel::Allocator *ca = alloc ? alloc : keel::default_allocator();
     if (buffer) {
-        const size_t es = elementSize(type);
-        const size_t copyBytes =
-            (es > 0) ? std::min(dims.numel() * es, buffer->bytes()) : buffer->bytes();
+        const keel::usize es = elementSize(type);
+        const keel::usize copyBytes =
+            (es > 0) ? keel::min(dims.numel() * es, buffer->bytes()) : buffer->bytes();
         if (copyBytes > 0) {
-            h->buffer = new DataBuffer(copyBytes, mr);
-            std::memcpy(h->buffer->data(), buffer->data(), copyBytes);
+            h->buffer = new DataBuffer(copyBytes, alloc);
+            keel::mem_copy(h->buffer->data(), buffer->data(), copyBytes);
         }
     }
     if (cellData)
-        h->cellData = new std::pmr::vector<Value>(*cellData, cmr);
-    if (structArray) {
-        h->structArray =
-            new std::pmr::vector<std::pmr::map<std::string, Value>>(cmr);
-        h->structArray->reserve(structArray->size());
-        using MapT = std::pmr::map<std::string, Value>;
-        for (const auto &m : *structArray)
-            h->structArray->emplace_back(MapT(m, cmr));
-    }
+        h->cellData = new keel::Array<Value>(cellData->clone(ca));
+    if (structArray)
+        h->structArray = new std::vector<std::map<std::string, Value>>(*structArray);
     if (fieldOrder)
-        h->fieldOrder = new std::pmr::vector<std::string>(*fieldOrder, cmr);
+        h->fieldOrder = new std::vector<std::string>(*fieldOrder);
     if (funcName)
         h->funcName = new std::string(*funcName);
     if (funcSource)
         h->funcSource = new std::string(*funcSource);
-    // ── OBJECT: the value/handle pivot (object_model.md §1), per element ──
     if (objClass) {
         h->objClass = new std::string(*objClass);
         h->objIsHandle = objIsHandle;
         h->objStates.reserve(objStates.size());
         for (const auto &st : objStates) {
-            // handle class → share the same state across copies;
-            // value class → deep-copy so each owner is independent.
             if (objIsHandle || !st)
                 h->objStates.push_back(st);
             else
-                h->objStates.push_back(st->deepCopy(cmr));
+                h->objStates.push_back(st->deepCopy(ca));
         }
     }
     return h;

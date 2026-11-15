@@ -7,8 +7,9 @@
 #pragma once
 
 #include <numkit/value/c_api.h>
-#include <numkit/value/span.hpp>
 #include <numkit/value/value.hpp>
+
+#include <keel/ref.h>
 
 #include <cstring>
 #include <exception>
@@ -43,17 +44,17 @@ inline void setError(numkit_error *err, int code, const char *msg) noexcept
 
 inline void invokeHostCallback(numkit_host_fn fn,
                                void *userData,
-                               Span<const Value> args,
-                               size_t nargout,
-                               Span<Value> outs)
+                               keel::ArrayRef<Value> args,
+                               keel::usize nargout,
+                               keel::MutArrayRef<Value> outs)
 {
     std::vector<numkit_val *> boxedArgs;
     boxedArgs.reserve(args.size());
-    for (size_t i = 0; i < args.size(); ++i) {
+    for (keel::usize i = 0; i < args.size(); ++i) {
         boxedArgs.push_back(boxValue(args[i]));
     }
 
-    size_t actualOut = outs.empty() ? 1 : outs.size();
+    keel::usize actualOut = outs.empty() ? 1 : outs.size();
     std::vector<numkit_val *> rawOuts(actualOut, nullptr);
     numkit_error cbErr{};
     clearError(&cbErr);
@@ -76,7 +77,7 @@ inline void invokeHostCallback(numkit_host_fn fn,
         throw std::runtime_error(cbErr.message[0] ? cbErr.message : "Host callback failed");
     }
 
-    for (size_t i = 0; i < rawOuts.size(); ++i) {
+    for (keel::usize i = 0; i < rawOuts.size(); ++i) {
         if (rawOuts[i]) {
             if (i < outs.size()) {
                 outs[i] = std::move(unboxValueMut(rawOuts[i]));
