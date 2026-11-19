@@ -6,7 +6,6 @@
 #pragma once
 
 #include <cassert>
-#include <cmath>
 #include <initializer_list>
 
 #include <keel/format.h>
@@ -89,7 +88,7 @@ inline keel::usize arrayDim(keel::f64 d, keel::StringRef fn)
         detail::fail(keel::format_small<192>(
                          "{}: size inputs must be finite (got {}).", fn, detail::num(d)),
                      fn, keel::format_small<96>("numkit:{}:sizeNotFinite", fn));
-    if (d != std::floor(d))
+    if (d != keel::floor(d))
         detail::fail(keel::format_small<192>(
                          "{}: size inputs must be integers (got {}).", fn, detail::num(d)),
                      fn, keel::format_small<96>("numkit:{}:sizeNotInteger", fn));
@@ -152,7 +151,7 @@ inline keel::usize reshapeSize(keel::f64 d, keel::StringRef fn)
         detail::fail(keel::format_small<192>(
                          "{}: size inputs must be non-negative (got {}).", fn, detail::num(d)),
                      fn, keel::format_small<96>("numkit:{}:sizeNegative", fn));
-    if (keel::is_nan(d) || keel::is_inf(d) || d != std::floor(d))
+    if (!keel::is_integer(d))
         detail::fail(keel::format_small<192>(
                          "{}: size inputs must be real integers (got {}).", fn, detail::num(d)),
                      fn, keel::format_small<96>("numkit:{}:sizeNotInteger", fn));
@@ -205,7 +204,7 @@ inline keel::i32 dimArg(keel::f64 d, keel::StringRef fn)
         detail::fail(keel::format_small<192>(
                          "{}: dimension argument must be finite (got {}).", fn, detail::num(d)),
                      fn, keel::format_small<96>("numkit:{}:dimNotFinite", fn));
-    if (d != std::floor(d))
+    if (d != keel::floor(d))
         detail::fail(keel::format_small<192>(
                          "{}: dimension argument must be an integer (got {}).", fn, detail::num(d)),
                      fn, keel::format_small<96>("numkit:{}:dimNotInteger", fn));
@@ -243,7 +242,7 @@ inline keel::i32 dimArg(const Value &v, keel::StringRef fn)
 inline keel::i32 expectedInteger(keel::f64 v, keel::i32 argNum, keel::StringRef argName,
                                  keel::StringRef fn)
 {
-    if (keel::is_nan(v) || keel::is_inf(v) || v != std::floor(v))
+    if (!keel::is_integer(v))
         detail::fail(keel::format_small<192>(
                          "{}: input {} ({}) must be an integer (got {}).",
                          fn, argNum, argName, detail::num(v)),
@@ -321,7 +320,7 @@ inline keel::usize roundLength(const Value &v, keel::i32 argNum, keel::StringRef
                                keel::StringRef fn)
 {
     const keel::f64 d = expectedReal(v, argNum, argName, fn);
-    const keel::f64 r = std::floor(d + 0.5);
+    const keel::f64 r = keel::floor(d + 0.5);
     if (!(r >= 0.0))
         detail::fail(keel::format_small<192>(
                          "{}: input {} ({}) must be non-negative (got {}).",
