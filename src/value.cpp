@@ -925,12 +925,12 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
 {
     if (!mr)
         mr = keel::default_allocator();
-    keel::String clsName(mr);
+    keel::StringRef clsName;
     bool handle = false;
     const NativePayload *protoNative = nullptr;
     for (size_t i = 0; i < count; ++i) {
         if (!elems[i].isEmpty() && elems[i].isObject()) {
-            clsName = elems[i].objectClassName();
+            clsName = elems[i].objectClassNameRef();
             handle = elems[i].objectIsHandle();
             if (const ObjectState *st = elems[i].objectStateConst())
                 protoNative = st->native.get();
@@ -965,13 +965,13 @@ Value Value::concatObjects(const Value *elems, size_t count, bool vertical,
             throw std::runtime_error(
                 "Cannot concatenate an object with a non-object value");
         }
-        const keel::String otherCls = elems[i].objectClassName();
+        const keel::StringRef otherCls = elems[i].objectClassNameRef();
         if (otherCls != clsName) {
             auto isGraphicsCls = [](keel::StringRef c) {
                 return c.starts_with("matlab.graphics.") || c.starts_with("matlab.ui.");
             };
             if (isGraphicsCls(clsName) && isGraphicsCls(otherCls)) {
-                clsName.assign("matlab.graphics.Graphics");
+                clsName = "matlab.graphics.Graphics";
             } else {
                 throw std::runtime_error(
                     "Cannot concatenate objects of different classes");
@@ -3287,7 +3287,7 @@ Value Value::objectConcatN(const Value *parts, size_t count, const Dims &outDims
 {
     if (!mr)
         mr = keel::default_allocator();
-    keel::String clsName(mr);
+    keel::StringRef clsName;
     bool found = false, handle = false;
     for (size_t i = 0; i < count; ++i) {
         if (parts[i].isEmpty())
@@ -3295,17 +3295,17 @@ Value Value::objectConcatN(const Value *parts, size_t count, const Dims &outDims
         if (!parts[i].isObject())
             throw std::runtime_error("Cannot concatenate an object with a non-object value");
         if (!found) {
-            clsName = parts[i].objectClassName();
+            clsName = parts[i].objectClassNameRef();
             handle = parts[i].objectIsHandle();
             found = true;
         } else {
-            const keel::String otherCls = parts[i].objectClassName();
+            const keel::StringRef otherCls = parts[i].objectClassNameRef();
             if (otherCls != clsName) {
                 auto isGraphicsCls = [](keel::StringRef c) {
                     return c.starts_with("matlab.graphics.") || c.starts_with("matlab.ui.");
                 };
                 if (isGraphicsCls(clsName) && isGraphicsCls(otherCls)) {
-                    clsName.assign("matlab.graphics.Graphics");
+                    clsName = "matlab.graphics.Graphics";
                 } else {
                     throw std::runtime_error("Cannot concatenate objects of different classes");
                 }
@@ -3314,7 +3314,7 @@ Value Value::objectConcatN(const Value *parts, size_t count, const Dims &outDims
     }
     HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::OBJECT;
-    h->objClass = h->allocNew<keel::String>(clsName.as_ref(), h->alloc);
+    h->objClass = h->allocNew<keel::String>(clsName, h->alloc);
     h->objIsHandle = handle;
     h->dims = outDims;
     for (size_t i = 0; i < count; ++i) {
@@ -3347,10 +3347,10 @@ void Value::objectEnsureArrayLike(const Value &proto, keel::Allocator *mr)
 {
     if (isObject())
         return;
-    const keel::String protoCls = proto.objectClassName();
+    const keel::StringRef protoCls = proto.objectClassNameRef();
     HeapGuard h(HeapObject::create(mr));
     h->type = ValueType::OBJECT;
-    h->objClass = h->allocNew<keel::String>(protoCls.as_ref(), h->alloc);
+    h->objClass = h->allocNew<keel::String>(protoCls, h->alloc);
     h->objIsHandle = proto.objectIsHandle();
     h->dims = Dims(size_t{0}, size_t{0}); // 0×0; `{0,0}` would pick the ptr ctor
     Value fresh;

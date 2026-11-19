@@ -411,7 +411,7 @@ size_t numkit_val_object_class(const numkit_val *v, char *buf, size_t buf_cap)
         if (buf && buf_cap > 0) buf[0] = '\0';
         return 0;
     }
-    return writeStrBuf(v->val.objectClassName(), buf, buf_cap);
+    return writeStrBuf(v->val.objectClassNameRef(), buf, buf_cap);
 }
 
 numkit_val *numkit_cell_create(const size_t *dims, int ndims, numkit_error *err)

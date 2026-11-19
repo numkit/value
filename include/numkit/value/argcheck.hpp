@@ -339,19 +339,16 @@ inline keel::usize expectedChoice(const Value &v,
 {
     auto describe = [&]() -> keel::SmallString<96> {
         if (v.isChar() || v.isString())
-            return keel::format_small<96>("got '{}'", v.toString());
+            return keel::format_small<96>("got '{}'", v.asStringRef());
         if (v.isScalar() && !v.isComplex())
             return keel::format_small<96>("got {}", detail::num(v.toScalar()));
         return keel::format_small<96>("argument is {}", detail::dimsStr(v));
     };
     if (v.isChar() || v.isString()) {
-        keel::String s = v.toString();
-        for (char &c : s)
-            c = keel::detail::to_ascii_lower(c);
-        const keel::StringRef sr = s.as_ref();
+        const keel::StringRef sr = v.asStringRef();
         keel::usize idx = 0;
         for (keel::StringRef c : choices) {
-            if (sr == c)
+            if (sr.equals_ignore_ascii_case(c))
                 return idx;
             ++idx;
         }
@@ -379,16 +376,14 @@ template <typename Str = keel::StringRef>
 inline keel::i32 matchStringChoice(const Value &name,
                                    keel::ArrayRef<Str> choices)
 {
-    keel::String s = name.toString();
-    for (char &c : s)
-        c = keel::detail::to_ascii_lower(c);
-    const keel::StringRef sr = s.as_ref();
+    const keel::StringRef sr = name.asStringRef();
     for (keel::usize i = 0; i < choices.size(); ++i)
-        if (keel::StringRef(choices[i]) == sr)
+        if (keel::StringRef(choices[i]).equals_ignore_ascii_case(sr))
             return static_cast<keel::i32>(i);
     keel::i32 hit = -1;
     for (keel::usize i = 0; i < choices.size(); ++i) {
-        if (keel::StringRef(choices[i]).starts_with(sr)) {
+        const keel::StringRef cand(choices[i]);
+        if (cand.size() >= sr.size() && cand.substr(0, sr.size()).equals_ignore_ascii_case(sr)) {
             if (hit >= 0)
                 return -2;
             hit = static_cast<keel::i32>(i);
@@ -507,7 +502,7 @@ void forEachNvPair(keel::ArrayRef<Value> in, keel::usize start,
         const keel::i32 hit = matchStringChoice(name, names);
         if (hit < 0)
             detail::fail(keel::format_small<192>(
-                             "{}: unrecognized parameter name '{}'.", fn, name.toString()),
+                             "{}: unrecognized parameter name '{}'.", fn, name.asStringRef()),
                          fn, tag);
         dispatch(static_cast<keel::usize>(hit), in[i + 1]);
     }
