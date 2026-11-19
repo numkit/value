@@ -75,11 +75,11 @@ public:
             context_.assign(context);
     }
 
-    keel::String formattedWhat() const
+    keel::String formattedWhat(keel::Allocator *alloc = nullptr) const
     {
         if (line_ <= 0)
-            return keel::String(what());
-        keel::String result = keel::format("Error at line {}", line_);
+            return keel::String(what(), alloc);
+        keel::String result = keel::format_alloc(alloc, "Error at line {}", line_);
         if (col_ > 0)
             keel::format_into(result, ", column {}", col_);
         if (!funcName_.empty())

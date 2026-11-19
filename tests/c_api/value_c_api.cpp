@@ -277,3 +277,157 @@ TEST(NumkitValueCApi, MdRefLayoutLeftViewsAndInterop)
     auto emptyView = empty.asMdRef<keel::f64, 2>();
     EXPECT_TRUE(emptyView.empty());
 }
+
+TEST(NumkitValueCApi, ZeroAllocStringRefsAndAllocatorRouting)
+{
+    using numkit::Value;
+
+    // ── 1. Zero-alloc *Ref accessors ─────────────────────────
+    Value vChar = Value::fromString("hello world");
+    keel::StringRef charRef = vChar.asStringRef();
+    EXPECT_EQ(charRef, "hello world");
+    EXPECT_EQ(charRef.data(), vChar.charData());
+
+    Value vEmptyChar = Value::fromString("");
+    EXPECT_TRUE(vEmptyChar.asStringRef().empty());
+
+    Value vStrArr = Value::stringArray(1, 3);
+    vStrArr.stringElemSet(0, "alpha");
+    vStrArr.stringElemSet(1, "beta");
+    vStrArr.stringElemSet(2, "gamma");
+    EXPECT_EQ(vStrArr.asStringRef(), "alpha");
+    EXPECT_EQ(vStrArr.stringElemRef(0), "alpha");
+    EXPECT_EQ(vStrArr.stringElemRef(1), "beta");
+    EXPECT_EQ(vStrArr.stringElemRef(2), "gamma");
+    EXPECT_TRUE(vStrArr.stringElemRef(99).empty());
+    EXPECT_TRUE(vChar.stringElemRef(0).empty());
+
+    Value vFh = Value::funcHandle("myfunc");
+    vFh.setFuncHandleSource("@(x) x + 1");
+    EXPECT_EQ(vFh.funcHandleNameRef(), "myfunc");
+    EXPECT_EQ(vFh.asStringRef(), "myfunc");
+    EXPECT_EQ(vFh.funcHandleSourceRef(), "@(x) x + 1");
+    EXPECT_TRUE(vChar.funcHandleNameRef().empty());
+    EXPECT_TRUE(vChar.funcHandleSourceRef().empty());
+
+    auto objState = keel::make_arc_in<numkit::ObjectState>(
+        keel::default_allocator(), keel::default_allocator());
+    Value vObj = Value::object("datetime", objState, false);
+    EXPECT_EQ(vObj.objectClassNameRef(), "datetime");
+    EXPECT_TRUE(vChar.objectClassNameRef().empty());
+
+    EXPECT_THROW((void)Value::scalar(1.0).asStringRef(), std::runtime_error);
+
+    // ── 2. Allocator routing on owning Value methods & Error ─
+    keel::Arena arena(64 * 1024);
+    keel::Allocator *alloc = arena.allocator();
+
+    {
+        keel::usize before = arena.used();
+        keel::String s1 = vChar.toString(alloc);
+        EXPECT_EQ(s1.as_ref(), "hello world");
+        EXPECT_EQ(s1.allocator(), alloc);
+        EXPECT_GT(arena.used(), before);
+
+        before = arena.used();
+        keel::String s2 = vStrArr.stringElem(1, alloc);
+        EXPECT_EQ(s2.as_ref(), "beta");
+        EXPECT_EQ(s2.allocator(), alloc);
+        EXPECT_GT(arena.used(), before);
+
+        before = arena.used();
+        keel::String s3 = vObj.objectClassName(alloc);
+        EXPECT_EQ(s3.as_ref(), "datetime");
+        EXPECT_EQ(s3.allocator(), alloc);
+        EXPECT_GT(arena.used(), before);
+
+        before = arena.used();
+        keel::String s4 = vFh.funcHandleName(alloc);
+        EXPECT_EQ(s4.as_ref(), "myfunc");
+        EXPECT_EQ(s4.allocator(), alloc);
+        EXPECT_GT(arena.used(), before);
+
+        before = arena.used();
+        keel::String s5 = vFh.funcHandleSource(alloc);
+        EXPECT_EQ(s5.as_ref(), "@(x) x + 1");
+        EXPECT_EQ(s5.allocator(), alloc);
+        EXPECT_GT(arena.used(), before);
+
+        // 2x3 char matrix (column-major): row 0 = "abc", row 1 = "xyz"
+        Value vCharMat = Value::matrix(2, 3, numkit::ValueType::CHAR);
+        char *cd = vCharMat.charDataMut();
+        cd[0] = 'a'; cd[1] = 'x';
+        cd[2] = 'b'; cd[3] = 'y';
+        cd[4] = 'c'; cd[5] = 'z';
+        before = arena.used();
+        keel::String row1 = vCharMat.charRow(1, alloc);
+        EXPECT_EQ(row1.as_ref(), "xyz");
+        EXPECT_EQ(row1.allocator(), alloc);
+        EXPECT_GT(arena.used(), before);
+
+        // fieldNamesInOrder: outer array + every inner String in alloc
+        Value st = Value::structure();
+        st.setField(0, "beta", Value::scalar(2.0));
+        st.setField(0, "alpha", Value::scalar(1.0));
+        before = arena.used();
+        keel::Array<keel::String> fields = st.fieldNamesInOrder(alloc);
+        ASSERT_EQ(fields.size(), keel::usize{2});
+        EXPECT_EQ(fields.allocator(), alloc);
+        EXPECT_EQ(fields[0].as_ref(), "beta");
+        EXPECT_EQ(fields[0].allocator(), alloc);
+        EXPECT_EQ(fields[1].as_ref(), "alpha");
+        EXPECT_EQ(fields[1].allocator(), alloc);
+        EXPECT_GT(arena.used(), before);
+
+        // resolveIndices / resolveIndicesUnchecked
+        Value idx = Value::matrix(1, 3);
+        idx.elem(0) = 2.0; idx.elem(1) = 4.0; idx.elem(2) = 1.0;
+        before = arena.used();
+        keel::Array<keel::usize> r1 = Value::resolveIndices(idx, 5, alloc);
+        ASSERT_EQ(r1.size(), keel::usize{3});
+        EXPECT_EQ(r1[0], keel::usize{1});
+        EXPECT_EQ(r1[1], keel::usize{3});
+        EXPECT_EQ(r1[2], keel::usize{0});
+        EXPECT_EQ(r1.allocator(), alloc);
+        EXPECT_GT(arena.used(), before);
+
+        before = arena.used();
+        keel::Array<keel::usize> r2 = Value::resolveIndicesUnchecked(idx, alloc);
+        ASSERT_EQ(r2.size(), keel::usize{3});
+        EXPECT_EQ(r2[0], keel::usize{1});
+        EXPECT_EQ(r2.allocator(), alloc);
+        EXPECT_GT(arena.used(), before);
+
+        // debugString & formatDisplay
+        before = arena.used();
+        keel::String dbg = vChar.debugString(alloc);
+        EXPECT_EQ(dbg.allocator(), alloc);
+        EXPECT_TRUE(dbg.as_ref().contains("hello world"));
+        EXPECT_GT(arena.used(), before);
+
+        before = arena.used();
+        keel::String disp = vChar.formatDisplay("msg", alloc);
+        EXPECT_EQ(disp.allocator(), alloc);
+        EXPECT_TRUE(disp.as_ref().contains("msg ="));
+        EXPECT_TRUE(disp.as_ref().contains("hello world"));
+        EXPECT_GT(arena.used(), before);
+
+        // Error::formattedWhat
+        numkit::Error errFull("bad input", 12, 5, "solve", "iter=3");
+        before = arena.used();
+        keel::String fw1 = errFull.formattedWhat(alloc);
+        EXPECT_EQ(fw1.allocator(), alloc);
+        EXPECT_TRUE(fw1.as_ref().contains("line 12"));
+        EXPECT_TRUE(fw1.as_ref().contains("bad input"));
+        EXPECT_GT(arena.used(), before);
+
+        numkit::Error errSimple("plain error");
+        before = arena.used();
+        keel::String fw2 = errSimple.formattedWhat(alloc);
+        EXPECT_EQ(fw2.allocator(), alloc);
+        EXPECT_EQ(fw2.as_ref(), "plain error");
+        EXPECT_GT(arena.used(), before);
+    }
+    arena.reset();
+    EXPECT_EQ(arena.used(), 0u);
+}

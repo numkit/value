@@ -202,8 +202,10 @@ public:
     Value logicalIndex(const keel::u8 *mask, keel::usize maskLen, keel::Allocator *alloc = nullptr) const;
 
     // ── Index resolution ────────────────────────────────────
-    static keel::Array<keel::usize> resolveIndices(const Value &idx, keel::usize dimSize);
-    static keel::Array<keel::usize> resolveIndicesUnchecked(const Value &idx);
+    static keel::Array<keel::usize> resolveIndices(const Value &idx, keel::usize dimSize,
+                                                   keel::Allocator *alloc = nullptr);
+    static keel::Array<keel::usize> resolveIndicesUnchecked(const Value &idx,
+                                                            keel::Allocator *alloc = nullptr);
     static keel::usize checkedScalarIndex(keel::f64 oneBased);
 
     // ── Type-preserving indexed assignment ──────────────────
@@ -247,7 +249,8 @@ public:
     static Value stringArrayND(const keel::usize *dims, keel::i32 nd, keel::Allocator *alloc = nullptr);
 
     // ── String accessors ────────────────────────────────────
-    keel::String stringElem(keel::usize i) const;
+    keel::StringRef stringElemRef(keel::usize i) const;
+    keel::String stringElem(keel::usize i, keel::Allocator *alloc = nullptr) const;
     void stringElemSet(keel::usize i, keel::StringRef s);
 
     // ── Type queries ─────────────────────────────────────────
@@ -273,7 +276,8 @@ public:
     bool isCsl() const;
 
     // ── OBJECT accessors (see object.hpp) ────────────────────
-    keel::String objectClassName() const;
+    keel::StringRef objectClassNameRef() const;
+    keel::String objectClassName(keel::Allocator *alloc = nullptr) const;
     bool objectIsHandle() const;
     keel::usize objectCount() const;
     const ObjectState *objectStateConst() const;
@@ -305,7 +309,8 @@ public:
     const char      *charData() const;
     keel::f64 toScalar() const;
     bool toBool() const;
-    keel::String toString() const;
+    keel::StringRef asStringRef() const;
+    keel::String toString(keel::Allocator *alloc = nullptr) const;
 
     // ── Const typed access — single ────────────────────────────
     const keel::f32 *singleData() const;
@@ -372,7 +377,7 @@ public:
     // ── Char element access ──────────────────────────────────
     char charElem(keel::usize i) const;
     char &charElemMut(keel::usize i);
-    keel::String charRow(keel::usize r) const;
+    keel::String charRow(keel::usize r, keel::Allocator *alloc = nullptr) const;
 
     // ── Resize ───────────────────────────────────────────────
     void resize(keel::usize newRows, keel::usize newCols, keel::Allocator *alloc = nullptr);
@@ -407,7 +412,7 @@ public:
     void setField(keel::usize linearIdx, keel::StringRef name, const Value &v);
     void setFieldAll(keel::StringRef name, const Value &v);
     void removeField(keel::StringRef name);
-    keel::Array<keel::String> fieldNamesInOrder() const;
+    keel::Array<keel::String> fieldNamesInOrder(keel::Allocator *alloc = nullptr) const;
 
     bool isStructArray() const;
     keel::HashMap<keel::String, Value> &structArrayElem(keel::usize i);
@@ -417,16 +422,18 @@ public:
     const keel::HashMap<keel::String, Value> &structArrayElem(keel::usize i) const;
 
     // ── Func handle ──────────────────────────────────────────
-    keel::String funcHandleName() const;
-    keel::String funcHandleSource() const;
+    keel::StringRef funcHandleNameRef() const;
+    keel::String funcHandleName(keel::Allocator *alloc = nullptr) const;
+    keel::StringRef funcHandleSourceRef() const;
+    keel::String funcHandleSource(keel::Allocator *alloc = nullptr) const;
     void setFuncHandleSource(keel::StringRef source);
     keel::usize funcHandleCaptureCount() const;
     const Value &funcHandleCapture(keel::usize i) const;
     void setFuncHandleCaptures(const Value *captures, keel::usize count);
 
     // ── Debug ────────────────────────────────────────────────
-    keel::String debugString() const;
-    keel::String formatDisplay(keel::StringRef name) const;
+    keel::String debugString(keel::Allocator *alloc = nullptr) const;
+    keel::String formatDisplay(keel::StringRef name, keel::Allocator *alloc = nullptr) const;
 
     // ── Fast scalar access for VM ────────────────────────────
     bool isDoubleScalar() const { return heap_ == nullptr; }

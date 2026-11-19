@@ -382,11 +382,15 @@ Value Value::stringArrayND(const size_t *dims, int nd, keel::Allocator *mr)
     m.heap_ = h.release();
     return m;
 }
-keel::String Value::stringElem(size_t i) const
+keel::StringRef Value::stringElemRef(keel::usize i) const
 {
     if (!isHeap() || heap_->type != ValueType::STRING || !heap_->cellData || i >= heap_->cellData->size())
         return {};
-    return (*heap_->cellData)[i].toString();
+    return (*heap_->cellData)[i].asStringRef();
+}
+keel::String Value::stringElem(keel::usize i, keel::Allocator *alloc) const
+{
+    return keel::String(stringElemRef(i), alloc);
 }
 void Value::stringElemSet(size_t i, keel::StringRef s)
 {
@@ -2132,9 +2136,10 @@ keel::usize Value::checkedScalarIndex(double v)
     return out0;
 }
 
-keel::Array<keel::usize> Value::resolveIndices(const Value &idx, size_t dimSize)
+keel::Array<keel::usize> Value::resolveIndices(const Value &idx, keel::usize dimSize,
+                                               keel::Allocator *alloc)
 {
-    keel::Array<keel::usize> out;
+    keel::Array<keel::usize> out(alloc);
     if (idx.isChar() && idx.numel() == 1 && idx.charData()[0] == ':') {
         out.resize(dimSize);
         for (size_t i = 0; i < dimSize; ++i)
@@ -2169,9 +2174,10 @@ keel::Array<keel::usize> Value::resolveIndices(const Value &idx, size_t dimSize)
     return out;
 }
 
-keel::Array<keel::usize> Value::resolveIndicesUnchecked(const Value &idx)
+keel::Array<keel::usize> Value::resolveIndicesUnchecked(const Value &idx,
+                                                        keel::Allocator *alloc)
 {
-    keel::Array<keel::usize> out;
+    keel::Array<keel::usize> out(alloc);
     if (idx.isChar() && idx.numel() == 1 && idx.charData()[0] == ':') {
         // Colon in unchecked context — caller must handle this separately
         return out;
@@ -3182,11 +3188,15 @@ bool Value::isObject() const
 {
     return type() == ValueType::OBJECT;
 }
-keel::String Value::objectClassName() const
+keel::StringRef Value::objectClassNameRef() const
 {
     if (isObject() && heap_->objClass)
-        return heap_->objClass->clone();
+        return heap_->objClass->as_ref();
     return {};
+}
+keel::String Value::objectClassName(keel::Allocator *alloc) const
+{
+    return keel::String(objectClassNameRef(), alloc);
 }
 bool Value::objectIsHandle() const
 {
@@ -3723,34 +3733,46 @@ bool Value::toBool() const
     throw std::runtime_error(
         keel::format_small<96>("Cannot convert {} to bool", mtypeName(type())).c_str());
 }
-keel::String Value::toString() const
+keel::StringRef Value::asStringRef() const
 {
     if (isHeap() && heap_->type == ValueType::CHAR) {
         if (heap_->buffer)
-            return keel::String(keel::StringRef(static_cast<const char *>(heap_->buffer->data()),
-                                                heap_->dims.numel()));
+            return keel::StringRef(static_cast<const char *>(heap_->buffer->data()),
+                                   heap_->dims.numel());
         return {}; // empty string (1x0 char)
     }
     if (isHeap() && heap_->type == ValueType::STRING) {
         if (heap_->cellData && !heap_->cellData->empty())
-            return (*heap_->cellData)[0].toString();
+            return (*heap_->cellData)[0].asStringRef();
         return {};
     }
     if (isHeap() && heap_->type == ValueType::FUNC_HANDLE && heap_->funcName)
-        return heap_->funcName->clone();
+        return heap_->funcName->as_ref();
     throw std::runtime_error("Not a char array");
 }
-keel::String Value::funcHandleName() const
+keel::String Value::toString(keel::Allocator *alloc) const
+{
+    return keel::String(asStringRef(), alloc);
+}
+keel::StringRef Value::funcHandleNameRef() const
 {
     if (isHeap() && heap_->funcName)
-        return heap_->funcName->clone();
+        return heap_->funcName->as_ref();
     return {};
 }
-keel::String Value::funcHandleSource() const
+keel::String Value::funcHandleName(keel::Allocator *alloc) const
+{
+    return keel::String(funcHandleNameRef(), alloc);
+}
+keel::StringRef Value::funcHandleSourceRef() const
 {
     if (isHeap() && heap_->funcSource)
-        return heap_->funcSource->clone();
+        return heap_->funcSource->as_ref();
     return {};
+}
+keel::String Value::funcHandleSource(keel::Allocator *alloc) const
+{
+    return keel::String(funcHandleSourceRef(), alloc);
 }
 void Value::setFuncHandleSource(keel::StringRef source)
 {
@@ -3967,7 +3989,7 @@ char &Value::charElemMut(size_t i)
     return charDataMut()[i];
 }
 
-keel::String Value::charRow(size_t r) const
+keel::String Value::charRow(keel::usize r, keel::Allocator *alloc) const
 {
     if (type() != ValueType::CHAR)
         throw std::runtime_error("charRow: value is not a char array");
@@ -3976,7 +3998,7 @@ keel::String Value::charRow(size_t r) const
         throw std::runtime_error("charRow: row index out of bounds");
     const char *cd = charData();
     size_t R = d.rows(), C = d.cols();
-    keel::String s = keel::String::with_capacity(C);
+    keel::String s = keel::String::with_capacity(C, alloc);
     for (size_t c = 0; c < C; ++c)
         s.push_back(cd[c * R + r]);
     return s;
@@ -4796,15 +4818,16 @@ void Value::removeField(keel::StringRef name)
     }
 }
 
-keel::Array<keel::String> Value::fieldNamesInOrder() const
+keel::Array<keel::String> Value::fieldNamesInOrder(keel::Allocator *alloc) const
 {
-    keel::Array<keel::String> out;
+    keel::Allocator *dstAlloc = alloc ? alloc : keel::default_allocator();
+    keel::Array<keel::String> out(dstAlloc);
     if (!isHeap() || heap_->type != ValueType::STRUCT) return out;
     if (heap_->fieldOrder && !heap_->fieldOrder->empty()) {
-        out = heap_->fieldOrder->clone();
+        out = heap_->fieldOrder->clone(dstAlloc);
         if (heap_->structArray && !heap_->structArray->empty()
             && (*heap_->structArray)[0].size() > out.size()) {
-            keel::Array<keel::String> extra;
+            keel::Array<keel::String> extra(dstAlloc);
             for (const auto &entry : (*heap_->structArray)[0]) {
                 bool seen = false;
                 for (const auto &existing : out) {
@@ -4814,7 +4837,7 @@ keel::Array<keel::String> Value::fieldNamesInOrder() const
                     }
                 }
                 if (!seen)
-                    extra.push_back(entry.key.clone());
+                    extra.push_back(entry.key.clone(dstAlloc));
             }
             keel::sort(extra);
             for (auto &e : extra)
@@ -4827,15 +4850,15 @@ keel::Array<keel::String> Value::fieldNamesInOrder() const
     if (heap_->structArray && !heap_->structArray->empty()) {
         out.reserve((*heap_->structArray)[0].size());
         for (const auto &entry : (*heap_->structArray)[0])
-            out.push_back(entry.key.clone());
+            out.push_back(entry.key.clone(dstAlloc));
         keel::sort(out);
     }
     return out;
 }
 
-keel::String Value::debugString() const
+keel::String Value::debugString(keel::Allocator *alloc) const
 {
-    keel::String os;
+    keel::String os(alloc);
     ValueType t = type();
     keel::format_into(os, "{} [{}x{}", mtypeName(t), dims().rows(), dims().cols());
     if (dims().is3D())
@@ -4895,22 +4918,22 @@ keel::String Value::debugString() const
         }
     }
     if (t == ValueType::CHAR && isHeap() && heap_->buffer)
-        keel::format_into(os, " = '{}'", toString());
+        keel::format_into(os, " = '{}'", asStringRef());
     if (t == ValueType::STRING) {
         if (isScalar())
-            keel::format_into(os, " = \"{}\"", toString());
+            keel::format_into(os, " = \"{}\"", asStringRef());
         else if (isHeap() && heap_->cellData) {
             os.append(" [");
             for (size_t i = 0; i < heap_->cellData->size() && i < 10; ++i) {
                 if (i)
                     os.append(", ");
-                keel::format_into(os, "\"{}\"", (*heap_->cellData)[i].toString());
+                keel::format_into(os, "\"{}\"", (*heap_->cellData)[i].asStringRef());
             }
             os.push_back(']');
         }
     }
     if (t == ValueType::FUNC_HANDLE)
-        keel::format_into(os, " = @{}", funcHandleName());
+        keel::format_into(os, " = @{}", funcHandleNameRef());
     if (t == ValueType::CELL && isHeap() && heap_->cellData) {
         os.append(" {");
         for (size_t i = 0; i < heap_->cellData->size() && i < 10; ++i) {
@@ -4959,9 +4982,9 @@ static keel::String fmtComplex(const keel::c64 &c)
     return os;
 }
 
-keel::String Value::formatDisplay(keel::StringRef name) const
+keel::String Value::formatDisplay(keel::StringRef name, keel::Allocator *alloc) const
 {
-    keel::String os;
+    keel::String os(alloc);
 
     if (!name.empty())
         keel::format_into(os, "{} =\n", name);
@@ -5015,7 +5038,7 @@ keel::String Value::formatDisplay(keel::StringRef name) const
     case ValueType::CHAR: {
         auto &d = dims();
         if (d.rows() <= 1) {
-            keel::format_into(os, "   '{}'\n", toString());
+            keel::format_into(os, "   '{}'\n", asStringRef());
         } else {
             for (size_t r = 0; r < d.rows(); ++r)
                 keel::format_into(os, "   '{}'\n", charRow(r));
@@ -5024,12 +5047,12 @@ keel::String Value::formatDisplay(keel::StringRef name) const
     }
     case ValueType::STRING:
         if (isScalar()) {
-            keel::format_into(os, "   \"{}\"\n", toString());
+            keel::format_into(os, "   \"{}\"\n", asStringRef());
         } else {
             auto &d = dims();
             keel::format_into(os, "  {}x{} string array\n", d.rows(), d.cols());
             for (size_t i = 0; i < numel() && i < 20; ++i)
-                keel::format_into(os, "    \"{}\"\n", stringElem(i));
+                keel::format_into(os, "    \"{}\"\n", stringElemRef(i));
         }
         break;
     case ValueType::LOGICAL: {
@@ -5170,7 +5193,7 @@ keel::String Value::formatDisplay(keel::StringRef name) const
         break;
     }
     case ValueType::FUNC_HANDLE:
-        keel::format_into(os, "   @{}\n", funcHandleName());
+        keel::format_into(os, "   @{}\n", funcHandleNameRef());
         break;
     case ValueType::CELL: {
         auto &d = dims();
