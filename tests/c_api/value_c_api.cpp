@@ -16,6 +16,7 @@
 #include <array>
 #include <limits>
 #include <string>
+#include <type_traits>
 
 TEST(NumkitValueCApi, ScalarsStringsAndHandleLifecycle)
 {
@@ -159,4 +160,120 @@ TEST(NumkitValueCApi, CanonicalIndexAndDimBounds)
                           numkit::kMaxExactDoubleInt, 1e300}) {
         EXPECT_THROW((void)numkit::Value::checkedScalarIndex(bad), std::runtime_error);
     }
+}
+
+TEST(NumkitValueCApi, MdRefLayoutLeftViewsAndInterop)
+{
+    using numkit::Value;
+
+    // 1D range ctor must NOT silently flatten multi-dimensional MdRef / StridedMdRef views.
+    static_assert(!std::is_constructible_v<Value, keel::MdRef<keel::f64, 2>>);
+    static_assert(!std::is_constructible_v<Value, keel::MutMdRef<keel::f64, 2>>);
+    static_assert(!std::is_constructible_v<Value, keel::ColMdRef<keel::f64, 2>>);
+    static_assert(!std::is_constructible_v<Value, keel::StridedMdRef<keel::f64, 2>>);
+    static_assert(!std::is_constructible_v<Value, keel::MutStridedMdRef<keel::f64, 2>>);
+
+    // 1. Inline double scalar -> 1D & 2D LayoutLeft views
+    Value s = Value::scalar(7.5);
+    auto sArr = s.asArrayRef<keel::f64>();
+    ASSERT_EQ(sArr.size(), keel::usize{1});
+    EXPECT_DOUBLE_EQ(sArr[0], 7.5);
+    auto s2d = s.asMdRef<keel::f64, 2>();
+    ASSERT_TRUE(s2d);
+    EXPECT_EQ(s2d.extent(0), keel::usize{1});
+    EXPECT_EQ(s2d.extent(1), keel::usize{1});
+    EXPECT_DOUBLE_EQ(s2d(0, 0), 7.5);
+    s.asMutArrayRef<keel::f64>()[0] = 9.25;
+    EXPECT_DOUBLE_EQ(s.toScalar(), 9.25);
+
+    // 2. 2D column-major matrix -> zero-copy asMdRef<f64, 2> + COW detach on asMutMdRef
+    Value m = Value::matrix(2, 3);
+    m.elem(0, 0) = 1.0; m.elem(0, 1) = 3.0; m.elem(0, 2) = 5.0;
+    m.elem(1, 0) = 2.0; m.elem(1, 1) = 4.0; m.elem(1, 2) = 6.0;
+
+    keel::ColMdRef<keel::f64, 2> mv = m.asMdRef<keel::f64, 2>();
+    ASSERT_TRUE(mv);
+    EXPECT_EQ(mv.data(), m.doubleData());
+    EXPECT_EQ(mv.extent(0), keel::usize{2});
+    EXPECT_EQ(mv.extent(1), keel::usize{3});
+    EXPECT_DOUBLE_EQ(mv(0, 0), 1.0);
+    EXPECT_DOUBLE_EQ(mv(1, 0), 2.0);
+    EXPECT_DOUBLE_EQ(mv(0, 2), 5.0);
+    EXPECT_DOUBLE_EQ(mv(1, 2), 6.0);
+    EXPECT_DOUBLE_EQ(mv.col(1)[0], 3.0);
+    EXPECT_DOUBLE_EQ(mv.col(1)[1], 4.0);
+
+    // Trailing singleton allowed: 2x3 matrix viewed as 2x3x1
+    auto mv3 = m.asMdRef<keel::f64, 3>();
+    ASSERT_TRUE(mv3);
+    EXPECT_EQ(mv3.extent(2), keel::usize{1});
+    EXPECT_DOUBLE_EQ(mv3(1, 2, 0), 6.0);
+
+    // COW detach via asMutMdRef
+    Value copy = m;
+    auto mutView = copy.asMutMdRef<keel::f64, 2>();
+    mutView(1, 1) = 42.0;
+    EXPECT_DOUBLE_EQ(copy(1, 1), 42.0);
+    EXPECT_DOUBLE_EQ(m(1, 1), 4.0);
+
+    // Type mismatch throws
+    EXPECT_THROW(((void)m.asArrayRef<keel::f32>()), std::runtime_error);
+    EXPECT_THROW(((void)m.asMdRef<keel::i32, 2>()), std::runtime_error);
+
+    // 3. 3D volume -> asMdRef<i32, 3> works; asMdRef<i32, 2> throws rank mismatch
+    Value vol = Value::matrix3d(2, 3, 4, numkit::ValueType::INT32);
+    auto v3mut = vol.asMutMdRef<keel::i32, 3>();
+    for (keel::usize p = 0; p < 4; ++p)
+        for (keel::usize c = 0; c < 3; ++c)
+            for (keel::usize r = 0; r < 2; ++r)
+                v3mut(r, c, p) = static_cast<keel::i32>(p * 100 + c * 10 + r);
+    EXPECT_THROW(((void)vol.asMdRef<keel::i32, 2>()), std::runtime_error);
+    auto v3c = vol.asMdRef<keel::i32, 3>();
+    EXPECT_EQ(v3c.subview(2)(1, 2), 221);
+
+    // 4. fromMdRef: LayoutRight (row-major -> column-major transpose) & LayoutLeft (direct copy)
+    const keel::f64 rowData[6] = {10.0, 20.0, 30.0, 40.0, 50.0, 60.0}; // 2x3 row-major
+    keel::MdRef<keel::f64, 2, keel::LayoutRight> rowView(keel::ArrayRef<keel::f64>(rowData, 6), 2, 3);
+    Value fromRow = Value::fromMdRef(rowView);
+    EXPECT_EQ(fromRow.dims().rows(), keel::usize{2});
+    EXPECT_EQ(fromRow.dims().cols(), keel::usize{3});
+    EXPECT_DOUBLE_EQ(fromRow(0, 0), 10.0);
+    EXPECT_DOUBLE_EQ(fromRow(0, 1), 20.0);
+    EXPECT_DOUBLE_EQ(fromRow(0, 2), 30.0);
+    EXPECT_DOUBLE_EQ(fromRow(1, 0), 40.0);
+    EXPECT_DOUBLE_EQ(fromRow(1, 1), 50.0);
+    EXPECT_DOUBLE_EQ(fromRow(1, 2), 60.0);
+
+    // 3D LayoutRight -> column-major Value
+    keel::f32 rowVol[24];
+    for (keel::usize r = 0; r < 2; ++r)
+        for (keel::usize c = 0; c < 3; ++c)
+            for (keel::usize p = 0; p < 4; ++p)
+                rowVol[(r * 3 + c) * 4 + p] = static_cast<keel::f32>(r * 100 + c * 10 + p);
+    keel::MdRef<keel::f32, 3, keel::LayoutRight> rowVolView(keel::ArrayRef<keel::f32>(rowVol, 24), 2, 3, 4);
+    Value fromRow3 = Value::fromMdRef(rowVolView);
+    auto back3 = fromRow3.asMdRef<keel::f32, 3>();
+    for (keel::usize r = 0; r < 2; ++r)
+        for (keel::usize c = 0; c < 3; ++c)
+            for (keel::usize p = 0; p < 4; ++p)
+                EXPECT_FLOAT_EQ(back3(r, c, p), static_cast<keel::f32>(r * 100 + c * 10 + p));
+
+    // LayoutLeft direct copy + zero-copy Value::view(ColMdRef)
+    const keel::c64 colCplx[4] = {{1, 2}, {3, 4}, {5, 6}, {7, 8}};
+    keel::ColMdRef<keel::c64, 2> cplxView(keel::ArrayRef<keel::c64>(colCplx, 4), 2, 2);
+    Value ownedCplx = Value::fromMdRef(cplxView);
+    auto ownedView = ownedCplx.asMdRef<keel::c64, 2>();
+    EXPECT_EQ(ownedView(1, 0), keel::c64(3, 4));
+    EXPECT_EQ(ownedView(0, 1), keel::c64(5, 6));
+
+    Value zeroCopy = Value::view(cplxView);
+    EXPECT_EQ(zeroCopy.complexData(), colCplx);
+    auto zcView = zeroCopy.asMdRef<keel::c64, 2>();
+    EXPECT_EQ(zcView(1, 1), keel::c64(7, 8));
+
+    // Empty matrix -> empty MdRef
+    Value empty = Value::matrix(0, 0);
+    EXPECT_TRUE(empty.asArrayRef<keel::f64>().empty());
+    auto emptyView = empty.asMdRef<keel::f64, 2>();
+    EXPECT_TRUE(emptyView.empty());
 }

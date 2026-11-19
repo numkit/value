@@ -154,6 +154,14 @@ Value Value::makeContiguous(const void *src, size_t count,
     return v;
 }
 
+void Value::throwRankMismatch(keel::i32 actualRank, keel::usize requestedRank)
+{
+    keel::SmallString<128> msg;
+    keel::format_into(msg, "Value::asMdRef: rank mismatch (value has ndim={}, requested Rank={})",
+                      actualRank, requestedRank);
+    throw std::runtime_error(msg.c_str());
+}
+
 Value::Value(std::initializer_list<double> il, keel::Allocator *mr)
     : Value()
 {
