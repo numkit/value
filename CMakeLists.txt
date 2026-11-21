@@ -29,7 +29,7 @@ if(NOT TARGET keel::keel)
         FetchContent_Declare(
             keel
             GIT_REPOSITORY https://github.com/keelcpp/keel.git
-            GIT_TAG        3527855c8aab9cf3635fd22df883902d267482e9
+            GIT_TAG        f9fcebfba18d98d2c14c8e62a1913412f1299220
         )
         FetchContent_MakeAvailable(keel)
     endif()
@@ -54,6 +54,19 @@ target_link_libraries(numkit_value PUBLIC keel::keel)
 
 if(EMSCRIPTEN)
     target_compile_options(numkit_value PRIVATE -fexceptions)
+endif()
+
+if(COMMAND keel_enforce_guidelines)
+    keel_enforce_guidelines(numkit_value
+        SCOPE ALL
+        BAN_RAW_INTS ALL
+        ALLOW_STDEXCEPT_IN_HEADERS ON
+        HEADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        ALLOWED_ANGLE_PREFIXES "numkit/"
+        EXCLUDE_FILES "c_api\\.h$" "c_api\\.cpp$"
+        STANDALONE_HEADERS ${NUMKIT_VALUE_BUILD_TESTS}
+        WARNINGS OFF
+    )
 endif()
 
 # Shared C-ABI library owning `numkit_val*` allocations across all modules

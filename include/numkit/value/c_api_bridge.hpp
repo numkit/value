@@ -30,7 +30,7 @@ inline void clearError(numkit_error *err) noexcept
     }
 }
 
-inline void setError(numkit_error *err, int code, const char *msg) noexcept
+inline void setError(numkit_error *err, keel::i32 code, const char *msg) noexcept
 {
     if (!err) return;
     err->code = code == 0 ? 1 : code;
@@ -63,7 +63,7 @@ inline void invokeHostCallback(numkit_host_fn fn,
     numkit_error cbErr{};
     clearError(&cbErr);
 
-    int rc = fn(userData,
+    const keel::i32 rc = fn(userData,
                 boxedArgs.empty() ? nullptr : boxedArgs.data(),
                 boxedArgs.size(),
                 nargout,
