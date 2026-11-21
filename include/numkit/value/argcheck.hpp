@@ -415,14 +415,17 @@ enum Class : keel::u32 {
 enum class ClassMask : keel::u32 {};
 constexpr ClassMask operator|(ClassMask a, ClassMask b)
 {
-    return static_cast<ClassMask>(keel::to_underlying(a)
-                                  | keel::to_underlying(b));
+    return keel::from_underlying<ClassMask>(keel::to_underlying(a)
+                                            | keel::to_underlying(b));
 }
 constexpr bool maskAccepts(ClassMask m, Class c)
 {
     return (keel::to_underlying(m) & keel::to_underlying(c)) != 0;
 }
-constexpr ClassMask classMaskOf(Class c) { return static_cast<ClassMask>(c); }
+constexpr ClassMask classMaskOf(Class c)
+{
+    return keel::from_underlying<ClassMask>(keel::to_underlying(c));
+}
 
 inline Class classBitOf(ValueType t)
 {
@@ -442,7 +445,7 @@ inline Class classBitOf(ValueType t)
     case ValueType::CHAR:    return ClsChr;
     default: break;
     }
-    return static_cast<Class>(0);
+    return keel::from_underlying<Class>(keel::u32{0});
 }
 
 struct RejectionVoice {
