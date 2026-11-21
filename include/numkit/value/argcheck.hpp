@@ -415,12 +415,12 @@ enum Class : keel::u32 {
 enum class ClassMask : keel::u32 {};
 constexpr ClassMask operator|(ClassMask a, ClassMask b)
 {
-    return static_cast<ClassMask>(static_cast<keel::u32>(a)
-                                  | static_cast<keel::u32>(b));
+    return static_cast<ClassMask>(keel::to_underlying(a)
+                                  | keel::to_underlying(b));
 }
 constexpr bool maskAccepts(ClassMask m, Class c)
 {
-    return (static_cast<keel::u32>(m) & static_cast<keel::u32>(c)) != 0;
+    return (keel::to_underlying(m) & keel::to_underlying(c)) != 0;
 }
 constexpr ClassMask classMaskOf(Class c) { return static_cast<ClassMask>(c); }
 
@@ -456,7 +456,7 @@ inline void requireClassSet(const Value &x, ClassMask accept,
                             keel::StringRef argName = "A",
                             const RejectionVoice &voice = {})
 {
-    assert(static_cast<keel::u32>(accept) != 0 && "empty class mask");
+    assert(keel::to_underlying(accept) != 0 && "empty class mask");
     const Class c = classBitOf(x.type());
     if (maskAccepts(accept, c))
         return;
