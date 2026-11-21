@@ -622,7 +622,7 @@ inline keel::MdRef<T, Rank, keel::LayoutLeft> Value::asMdRef() const
         return keel::MdRef<T, 1, keel::LayoutLeft>(flat);
     } else {
         const Dims &d = dims();
-        if (d.ndim() > static_cast<keel::i32>(Rank)) {
+        if (d.ndim() > keel::as<keel::i32>(Rank)) {
             throwRankMismatch(d.ndim(), Rank);
         }
         if (flat.empty()) {
@@ -630,7 +630,7 @@ inline keel::MdRef<T, Rank, keel::LayoutLeft> Value::asMdRef() const
         }
         keel::StaticArray<keel::usize, Rank> shape{};
         for (keel::usize k = 0; k < Rank; ++k) {
-            shape[k] = d.dim(static_cast<keel::i32>(k));
+            shape[k] = d.dim(keel::as<keel::i32>(k));
         }
         return keel::MdRef<T, Rank, keel::LayoutLeft>(flat, shape);
     }
@@ -645,7 +645,7 @@ inline keel::MutMdRef<T, Rank, keel::LayoutLeft> Value::asMutMdRef()
         return keel::MutMdRef<T, 1, keel::LayoutLeft>(flat);
     } else {
         const Dims &d = dims();
-        if (d.ndim() > static_cast<keel::i32>(Rank)) {
+        if (d.ndim() > keel::as<keel::i32>(Rank)) {
             throwRankMismatch(d.ndim(), Rank);
         }
         if (flat.empty()) {
@@ -653,7 +653,7 @@ inline keel::MutMdRef<T, Rank, keel::LayoutLeft> Value::asMutMdRef()
         }
         keel::StaticArray<keel::usize, Rank> shape{};
         for (keel::usize k = 0; k < Rank; ++k) {
-            shape[k] = d.dim(static_cast<keel::i32>(k));
+            shape[k] = d.dim(keel::as<keel::i32>(k));
         }
         return keel::MutMdRef<T, Rank, keel::LayoutLeft>(flat, shape);
     }
@@ -674,7 +674,7 @@ inline Value Value::view(keel::MdRef<T, Rank, keel::LayoutLeft> src)
     } else if constexpr (Rank == 3) {
         return view(src.data(), vt, Dims(src.extent(0), src.extent(1), src.extent(2)));
     } else {
-        return view(src.data(), vt, Dims(src.shape().data(), static_cast<keel::i32>(Rank)));
+        return view(src.data(), vt, Dims(src.shape().data(), keel::as<keel::i32>(Rank)));
     }
 }
 
@@ -691,7 +691,7 @@ inline Value Value::fromMdRef(keel::MdRef<T, Rank, Layout> src, keel::Allocator 
     } else {
         Value out = (Rank == 2)
                         ? Value::matrix(src.extent(0), src.extent(1), vt, alloc)
-                        : Value::matrixND(src.shape().data(), static_cast<keel::i32>(Rank), vt, alloc);
+                        : Value::matrixND(src.shape().data(), keel::as<keel::i32>(Rank), vt, alloc);
         T *dstPtr = out.typedDataMutPtr<T>();
         if constexpr (keel::IsSame<Layout, keel::LayoutLeft>) {
             keel::mem_copy(dstPtr, src.data(), src.size() * sizeof(T));
@@ -755,7 +755,7 @@ inline Value::Value(const R &range, keel::Allocator *alloc)
 {
     using ElemT = keel::RemoveCv<keel::RemovePointer<decltype(range.data())>>;
     constexpr ValueType vt = detail::value_type_for<ElemT>::type;
-    *this = makeContiguous(range.data(), static_cast<keel::usize>(range.size()), vt, sizeof(ElemT), alloc);
+    *this = makeContiguous(range.data(), keel::as<keel::usize>(range.size()), vt, sizeof(ElemT), alloc);
 }
 
 } // namespace numkit

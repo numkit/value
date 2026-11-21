@@ -23,9 +23,9 @@ inline bool refDecIsZero(RefCount &r) noexcept
 inline keel::i32 refLoadAcquire(const RefCount &r) noexcept
 {
 #if defined(_MSC_VER) && !defined(__clang__)
-    return static_cast<keel::i32>(keel::detail::arc_load(r));
+    return keel::as<keel::i32>(keel::detail::arc_load(r));
 #else
-    return static_cast<keel::i32>(__atomic_load_n(&r, __ATOMIC_ACQUIRE));
+    return keel::as<keel::i32>(__atomic_load_n(&r, __ATOMIC_ACQUIRE));
 #endif
 }
 

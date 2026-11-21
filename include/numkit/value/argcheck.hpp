@@ -213,12 +213,12 @@ inline keel::i32 dimArg(keel::f64 d, keel::StringRef fn)
                          "{}: dimension argument must be a positive integer (got {}).",
                          fn, detail::num(d)),
                      fn, keel::format_small<96>("numkit:{}:dimNotPositive", fn));
-    if (d > static_cast<keel::f64>(keel::Limits<keel::i32>::kMax))
+    if (d > keel::as<keel::f64>(keel::Limits<keel::i32>::kMax))
         detail::fail(keel::format_small<192>(
                          "{}: dimension argument exceeds maximum supported rank (got {}).",
                          fn, detail::num(d)),
                      fn, keel::format_small<96>("numkit:{}:dimTooLarge", fn));
-    return static_cast<keel::i32>(d);
+    return keel::as<keel::i32>(d);
 }
 
 inline keel::i32 dimArg(const Value &v, keel::StringRef fn)
@@ -247,13 +247,13 @@ inline keel::i32 expectedInteger(keel::f64 v, keel::i32 argNum, keel::StringRef 
                          "{}: input {} ({}) must be an integer (got {}).",
                          fn, argNum, argName, detail::num(v)),
                      fn, keel::format_small<96>("numkit:{}:{}NotInteger", fn, argName));
-    if (v < static_cast<keel::f64>(keel::Limits<keel::i32>::kMin)
-        || v > static_cast<keel::f64>(keel::Limits<keel::i32>::kMax))
+    if (v < keel::as<keel::f64>(keel::Limits<keel::i32>::kMin)
+        || v > keel::as<keel::f64>(keel::Limits<keel::i32>::kMax))
         detail::fail(keel::format_small<192>(
                          "{}: input {} ({}) exceeds integer range (got {}).",
                          fn, argNum, argName, detail::num(v)),
                      fn, keel::format_small<96>("numkit:{}:{}OutOfRange", fn, argName));
-    return static_cast<keel::i32>(v);
+    return keel::as<keel::i32>(v);
 }
 
 inline void expectedNonNegative(keel::f64 v, keel::i32 argNum, keel::StringRef argName,
@@ -303,7 +303,7 @@ inline keel::i32 expectedOneOf(keel::f64 v, std::initializer_list<keel::f64> cho
     expectedInteger(v, argNum, argName, fn);
     for (keel::f64 c : choices)
         if (v == c)
-            return static_cast<keel::i32>(v);
+            return keel::as<keel::i32>(v);
     keel::SmallString<128> list;
     for (keel::f64 c : choices) {
         if (!list.empty())
@@ -326,7 +326,7 @@ inline keel::usize roundLength(const Value &v, keel::i32 argNum, keel::StringRef
                          "{}: input {} ({}) must be non-negative (got {}).",
                          fn, argNum, argName, detail::num(d)),
                      fn, keel::format_small<96>("numkit:{}:{}NotNegative", fn, argName));
-    return static_cast<keel::usize>(r);
+    return keel::as<keel::usize>(r);
 }
 
 // ============================================================
@@ -379,14 +379,14 @@ inline keel::i32 matchStringChoice(const Value &name,
     const keel::StringRef sr = name.asStringRef();
     for (keel::usize i = 0; i < choices.size(); ++i)
         if (keel::StringRef(choices[i]).equals_ignore_ascii_case(sr))
-            return static_cast<keel::i32>(i);
+            return keel::as<keel::i32>(i);
     keel::i32 hit = -1;
     for (keel::usize i = 0; i < choices.size(); ++i) {
         const keel::StringRef cand(choices[i]);
         if (cand.size() >= sr.size() && cand.substr(0, sr.size()).equals_ignore_ascii_case(sr)) {
             if (hit >= 0)
                 return -2;
-            hit = static_cast<keel::i32>(i);
+            hit = keel::as<keel::i32>(i);
         }
     }
     return hit;
@@ -504,7 +504,7 @@ void forEachNvPair(keel::ArrayRef<Value> in, keel::usize start,
             detail::fail(keel::format_small<192>(
                              "{}: unrecognized parameter name '{}'.", fn, name.asStringRef()),
                          fn, tag);
-        dispatch(static_cast<keel::usize>(hit), in[i + 1]);
+        dispatch(keel::as<keel::usize>(hit), in[i + 1]);
     }
 }
 

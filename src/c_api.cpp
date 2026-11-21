@@ -288,7 +288,7 @@ size_t numkit_val_dims(const numkit_val *v, size_t *out_dims, size_t max_dims)
     if (out_dims && max_dims > 0) {
         size_t n = keel::min<size_t>(nd, max_dims);
         for (size_t i = 0; i < n; ++i) {
-            out_dims[i] = d.dim(static_cast<int>(i));
+            out_dims[i] = d.dim(keel::as<int>(i));
         }
     }
     return nd;

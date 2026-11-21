@@ -42,7 +42,7 @@ inline T roundSaturateInt(keel::f64 v) noexcept
 
 inline char doubleToCharSafe(keel::f64 v) noexcept
 {
-    return static_cast<char>(keel::round_sat<keel::u8>(v));
+    return keel::as<char>(keel::round_sat<keel::u8>(v));
 }
 
 } // namespace
@@ -500,7 +500,7 @@ keel::usize Value::colonCount(double start, double step, double stop)
         n--;
     if (n < 0)
         n = 0;
-    return static_cast<keel::usize>(n);
+    return keel::as<keel::usize>(n);
 }
 
 Value Value::colonRange(double start, double stop, keel::Allocator *mr)
@@ -515,9 +515,9 @@ Value Value::colonRange(double start, double step, double stop, keel::Allocator 
     if (count > 0) {
         double *d = result.doubleDataMut();
         for (keel::usize i = 0; i < count; ++i)
-            d[i] = start + static_cast<double>(i) * step;
+            d[i] = start + keel::as<double>(i) * step;
         if (count >= 2) {
-            double last = start + static_cast<double>(count - 1) * step;
+            double last = start + keel::as<double>(count - 1) * step;
             if ((step > 0 && last > stop) || (step < 0 && last < stop))
                 d[count - 1] = stop;
         }
@@ -542,9 +542,9 @@ Value Value::colonRangeTyped(double start, double step, double stop,
     auto write_loop = [&](auto *dp, auto /*tag*/) {
         using T = keel::RemovePointer<decltype(dp)>;
         for (keel::usize i = 0; i < count; ++i)
-            dp[i] = static_cast<T>(start + static_cast<double>(i) * step);
+            dp[i] = static_cast<T>(start + keel::as<double>(i) * step);
         if (count >= 2) {
-            double last = start + static_cast<double>(count - 1) * step;
+            double last = start + keel::as<double>(count - 1) * step;
             if ((step > 0 && last > stop) || (step < 0 && last < stop))
                 dp[count - 1] = static_cast<T>(stop);
         }
@@ -553,10 +553,10 @@ Value Value::colonRangeTyped(double start, double step, double stop,
       case ValueType::CHAR: {
         char *cp = result.charDataMut();
         for (keel::usize i = 0; i < count; ++i) {
-            double v = std::floor(start + static_cast<double>(i) * step);
+            double v = std::floor(start + keel::as<double>(i) * step);
             if (v < 0.0) v = 0.0;
             else if (v > 255.0) v = 255.0;
-            cp[i] = static_cast<char>(static_cast<keel::u8>(v));
+            cp[i] = keel::as<char>(keel::as<keel::u8>(v));
         }
         break;
       }
@@ -670,19 +670,19 @@ double Value::elemAsDouble(keel::usize idx) const
 {
     switch (type()) {
     case ValueType::DOUBLE:  return doubleData()[idx];
-    case ValueType::LOGICAL: return static_cast<double>(logicalData()[idx]);
+    case ValueType::LOGICAL: return keel::as<double>(logicalData()[idx]);
     case ValueType::COMPLEX: return complexData()[idx].real();
     case ValueType::CHAR:
-        return static_cast<double>(static_cast<keel::u8>(charData()[idx]));
-    case ValueType::SINGLE:  return static_cast<double>(singleData()[idx]);
-    case ValueType::INT8:    return static_cast<double>(int8Data()[idx]);
-    case ValueType::INT16:   return static_cast<double>(int16Data()[idx]);
-    case ValueType::INT32:   return static_cast<double>(int32Data()[idx]);
-    case ValueType::INT64:   return static_cast<double>(int64Data()[idx]);
-    case ValueType::UINT8:   return static_cast<double>(uint8Data()[idx]);
-    case ValueType::UINT16:  return static_cast<double>(uint16Data()[idx]);
-    case ValueType::UINT32:  return static_cast<double>(uint32Data()[idx]);
-    case ValueType::UINT64:  return static_cast<double>(uint64Data()[idx]);
+        return keel::as<double>(keel::as<keel::u8>(charData()[idx]));
+    case ValueType::SINGLE:  return keel::as<double>(singleData()[idx]);
+    case ValueType::INT8:    return keel::as<double>(int8Data()[idx]);
+    case ValueType::INT16:   return keel::as<double>(int16Data()[idx]);
+    case ValueType::INT32:   return keel::as<double>(int32Data()[idx]);
+    case ValueType::INT64:   return keel::as<double>(int64Data()[idx]);
+    case ValueType::UINT8:   return keel::as<double>(uint8Data()[idx]);
+    case ValueType::UINT16:  return keel::as<double>(uint16Data()[idx]);
+    case ValueType::UINT32:  return keel::as<double>(uint32Data()[idx]);
+    case ValueType::UINT64:  return keel::as<double>(uint64Data()[idx]);
     case ValueType::OBJECT: {
         const auto *st = objectStateAt(idx);
         if (st && st->native)
@@ -1105,12 +1105,12 @@ Value Value::horzcat(const Value *elems, keel::usize count, keel::Allocator *mr)
             if (elems[i].type() == ValueType::CHAR) {
                 result.append(keel::StringRef(elems[i].charData(), elems[i].numel()));
             } else if (elems[i].isScalar()) {
-                result.push_back(static_cast<char>(keel::round_i32(elems[i].toScalar())));
+                result.push_back(keel::as<char>(keel::round_i32(elems[i].toScalar())));
             } else {
                 // Non-scalar double/logical: convert each element to char
                 const double *d = elems[i].doubleData();
                 for (keel::usize k = 0; k < elems[i].numel(); ++k)
-                    result.push_back(static_cast<char>(keel::round_i32(d[k])));
+                    result.push_back(keel::as<char>(keel::round_i32(d[k])));
             }
         }
         if (multiRow && sameRows && rows > 1 && rows * totalCols == result.size()) {
@@ -1225,7 +1225,7 @@ Value Value::horzcat(const Value *elems, keel::usize count, keel::Allocator *mr)
                       elems[i], eR, eC, eP, 0, colOff, pages, readElemAsComplex);
         else if (workType == ValueType::SINGLE)
             copyBlock(result.singleDataMut(), rows, totalCols,
-                      elems[i], eR, eC, eP, 0, colOff, pages, [](const Value &v, keel::usize i) { return static_cast<float>(v.elemAsDouble(i)); });
+                      elems[i], eR, eC, eP, 0, colOff, pages, [](const Value &v, keel::usize i) { return keel::as<float>(v.elemAsDouble(i)); });
         else if (workType == ValueType::LOGICAL)
             copyBlock(result.logicalDataMut(), rows, totalCols,
                       elems[i], eR, eC, eP, 0, colOff, pages, readElemAsLogical);
@@ -1315,7 +1315,7 @@ Value Value::vertcat(const Value *elems, keel::usize count, keel::Allocator *mr)
                 for (keel::usize c = 0; c < eC; ++c)
                     for (keel::usize r = 0; r < eR; ++r)
                         dst[c * totalRows + rowOff + r] =
-                            static_cast<char>(keel::round_i32(
+                            keel::as<char>(keel::round_i32(
                                 elems[i].elemAsDouble(c * eR + r)));
             }
             rowOff += eR;
@@ -1414,7 +1414,7 @@ Value Value::vertcat(const Value *elems, keel::usize count, keel::Allocator *mr)
                       elems[i], eR, eC, eP, rowOff, 0, pages, readElemAsComplex);
         else if (workType == ValueType::SINGLE)
             copyBlock(result.singleDataMut(), totalRows, cols,
-                      elems[i], eR, eC, eP, rowOff, 0, pages, [](const Value &v, keel::usize i) { return static_cast<float>(v.elemAsDouble(i)); });
+                      elems[i], eR, eC, eP, rowOff, 0, pages, [](const Value &v, keel::usize i) { return keel::as<float>(v.elemAsDouble(i)); });
         else if (workType == ValueType::LOGICAL)
             copyBlock(result.logicalDataMut(), totalRows, cols,
                       elems[i], eR, eC, eP, rowOff, 0, pages, readElemAsLogical);
@@ -1542,7 +1542,7 @@ Value narrowComplex(Value v, keel::Allocator *mr)
     if (v.isSingleComplex()) {
         Value r = Value::matrixND(dimsBuf, nd, ValueType::SINGLE, mr);
         float *o = r.singleDataMut();
-        for (keel::usize i = 0; i < n; ++i) o[i] = static_cast<float>(d[i].real());
+        for (keel::usize i = 0; i < n; ++i) o[i] = keel::as<float>(d[i].real());
         return r;
     }
     Value r = Value::matrixND(dimsBuf, nd, ValueType::DOUBLE, mr);
@@ -2219,7 +2219,7 @@ static void writeElem(Value &dst, keel::usize idx, const Value &val, keel::usize
         if (val.type() == ValueType::COMPLEX) // MATLAB errors; don't drop imag silently
             throw std::runtime_error("keel::c64 values cannot be converted to logicals.");
         double dv = val.elemAsDouble(valIdx);
-        dst.logicalDataMut()[idx] = static_cast<keel::u8>(dv != 0.0);
+        dst.logicalDataMut()[idx] = keel::as<keel::u8>(dv != 0.0);
         break;
     }
     case ValueType::CHAR:
@@ -2246,7 +2246,7 @@ static void writeElem(Value &dst, keel::usize idx, const Value &val, keel::usize
     case ValueType::UINT16: dst.uint16DataMut()[idx] = roundSaturateInt<keel::u16>(val.elemAsDouble(valIdx)); break;
     case ValueType::UINT32: dst.uint32DataMut()[idx] = roundSaturateInt<keel::u32>(val.elemAsDouble(valIdx)); break;
     case ValueType::UINT64: dst.uint64DataMut()[idx] = roundSaturateInt<keel::u64>(val.elemAsDouble(valIdx)); break;
-    case ValueType::SINGLE: dst.singleDataMut()[idx] = static_cast<float   >(val.elemAsDouble(valIdx)); break;
+    case ValueType::SINGLE: dst.singleDataMut()[idx] = keel::as<float>(val.elemAsDouble(valIdx)); break;
     default:
         throw std::runtime_error(
             keel::format_small<96>("Indexed assignment not supported for type '{}'",
@@ -2268,7 +2268,7 @@ static void writeScalar(Value &dst, keel::usize idx, const Value &val)
     case ValueType::LOGICAL:
         if (val.type() == ValueType::COMPLEX) // MATLAB errors; don't drop imag silently
             throw std::runtime_error("keel::c64 values cannot be converted to logicals.");
-        dst.logicalDataMut()[idx] = static_cast<keel::u8>(val.toScalar() != 0.0);
+        dst.logicalDataMut()[idx] = keel::as<keel::u8>(val.toScalar() != 0.0);
         break;
     case ValueType::CHAR:
         dst.charDataMut()[idx] = doubleToCharSafe(val.toScalar());
@@ -2291,7 +2291,7 @@ static void writeScalar(Value &dst, keel::usize idx, const Value &val)
     case ValueType::UINT16: dst.uint16DataMut()[idx] = roundSaturateInt<keel::u16>(val.toScalar()); break;
     case ValueType::UINT32: dst.uint32DataMut()[idx] = roundSaturateInt<keel::u32>(val.toScalar()); break;
     case ValueType::UINT64: dst.uint64DataMut()[idx] = roundSaturateInt<keel::u64>(val.toScalar()); break;
-    case ValueType::SINGLE: dst.singleDataMut()[idx] = static_cast<float   >(val.toScalar()); break;
+    case ValueType::SINGLE: dst.singleDataMut()[idx] = keel::as<float>(val.toScalar()); break;
     default:
         throw std::runtime_error(
             keel::format_small<96>("Indexed assignment not supported for type '{}'",
@@ -3429,15 +3429,15 @@ void Value::objectAssignND(keel::ArrayRef<keel::Array<keel::usize>> perDim,
     };
 
     const keel::i32 curNd = heap_->dims.ndim();
-    const keel::i32 nd = keel::max(static_cast<keel::i32>(perDim.size()), curNd);
-    keel::SmallArray<keel::usize, Dims::kMaxRank> newSize(static_cast<keel::usize>(nd), mr);
+    const keel::i32 nd = keel::max(keel::as<keel::i32>(perDim.size()), curNd);
+    keel::SmallArray<keel::usize, Dims::kMaxRank> newSize(keel::as<keel::usize>(nd), mr);
     for (keel::i32 d = 0; d < nd; ++d) {
         keel::usize cur = (d < curNd) ? heap_->dims.dim(d) : 1;
         keel::usize need = 1;
-        if (d < static_cast<keel::i32>(perDim.size()))
-            for (keel::usize v : perDim[static_cast<keel::usize>(d)])
+        if (d < keel::as<keel::i32>(perDim.size()))
+            for (keel::usize v : perDim[keel::as<keel::usize>(d)])
                 need = keel::max(need, v + 1);
-        newSize[static_cast<keel::usize>(d)] = keel::max(cur, need);
+        newSize[keel::as<keel::usize>(d)] = keel::max(cur, need);
     }
     Dims newDims(newSize.data(), nd);
 
@@ -3481,17 +3481,17 @@ void Value::objectAssignND(keel::ArrayRef<keel::Array<keel::usize>> perDim,
         return;
     keel::usize str[Dims::kMaxRank];
     computeStridesColMajor(heap_->dims, str);
-    const keel::i32 pnd = static_cast<keel::i32>(perDim.size());
-    keel::SmallArray<keel::usize, Dims::kMaxRank> counts(static_cast<keel::usize>(pnd), mr);
+    const keel::i32 pnd = keel::as<keel::i32>(perDim.size());
+    keel::SmallArray<keel::usize, Dims::kMaxRank> counts(keel::as<keel::usize>(pnd), mr);
     for (keel::i32 d = 0; d < pnd; ++d)
-        counts[static_cast<keel::usize>(d)] = perDim[static_cast<keel::usize>(d)].size();
+        counts[keel::as<keel::usize>(d)] = perDim[keel::as<keel::usize>(d)].size();
     Dims iter(counts.data(), pnd);
-    keel::SmallArray<keel::usize, Dims::kMaxRank> coords(static_cast<keel::usize>(pnd), keel::usize{0}, mr);
+    keel::SmallArray<keel::usize, Dims::kMaxRank> coords(keel::as<keel::usize>(pnd), keel::usize{0}, mr);
     keel::usize k = 0;
     do {
         keel::usize lin = 0;
         for (keel::i32 d = 0; d < pnd; ++d)
-            lin += perDim[static_cast<keel::usize>(d)][coords[static_cast<keel::usize>(d)]] * str[d];
+            lin += perDim[keel::as<keel::usize>(d)][coords[keel::as<keel::usize>(d)]] * str[d];
         heap_->objStates[lin] = rhsSlot(k++);
     } while (incrementCoords(coords.data(), iter));
 }
@@ -3932,7 +3932,7 @@ void Value::promoteToComplex(keel::Allocator *mr)
         if (t == ValueType::SINGLE) {
             const float *src = static_cast<const float *>(heap_->buffer->data());
             for (keel::usize i = 0; i < n; ++i)
-                dst[i] = keel::c64(static_cast<double>(src[i]), 0.0);
+                dst[i] = keel::c64(keel::as<double>(src[i]), 0.0);
         } else {
             const double *src = static_cast<const double *>(heap_->buffer->data());
             for (keel::usize i = 0; i < n; ++i)
@@ -4086,7 +4086,7 @@ void Value::resize(keel::usize newRows, keel::usize newCols, keel::Allocator *mr
     auto *nb2 = (nb > 0) ? DataBuffer::create(nb, mr) : nullptr;
     if (nb > 0) {
         // CHAR arrays fill with spaces; everything else with zeros
-        keel::u8 fill = (heap_->type == ValueType::CHAR) ? static_cast<keel::u8>(' ') : keel::u8{0};
+        keel::u8 fill = (heap_->type == ValueType::CHAR) ? keel::as<keel::u8>(' ') : keel::u8{0};
         keel::mem_set(nb2->data(), fill, nb);
     }
     if (heap_->buffer && nb2 && cr > 0 && cc > 0) {
@@ -4154,7 +4154,7 @@ void Value::resize3d(keel::usize nr, keel::usize nc, keel::usize np, keel::Alloc
     const keel::usize nb = checkedMulSize(checkedMulSize(checkedMulSize(nr, nc), np), es);
     auto *nb2 = (nb > 0) ? DataBuffer::create(nb, mr) : nullptr;
     if (nb > 0) {
-        keel::u8 fill = (heap_->type == ValueType::CHAR) ? static_cast<keel::u8>(' ') : keel::u8{0};
+        keel::u8 fill = (heap_->type == ValueType::CHAR) ? keel::as<keel::u8>(' ') : keel::u8{0};
         keel::mem_set(nb2->data(), fill, nb);
     }
     if (heap_->buffer && nb2 && cr > 0 && cc > 0 && cp > 0) {
@@ -4257,7 +4257,7 @@ void Value::resizeND(const keel::usize *newDims, keel::i32 nd, keel::Allocator *
     const keel::usize nb = checkedMulSize(newTotal, es);
     auto *nb2 = (nb > 0) ? DataBuffer::create(nb, mr) : nullptr;
     if (nb > 0) {
-        const keel::u8 fill = (t == ValueType::CHAR) ? static_cast<keel::u8>(' ') : keel::u8{0};
+        const keel::u8 fill = (t == ValueType::CHAR) ? keel::as<keel::u8>(' ') : keel::u8{0};
         keel::mem_set(nb2->data(), fill, nb);
     }
     if (heap_->buffer && nb2 && commonTotal > 0) {
@@ -4958,8 +4958,8 @@ static keel::String fmtDouble(double v)
     if (keel::is_inf(v)) return keel::String::from(v > 0 ? "Inf" : "-Inf");
     if (v == 0.0) return keel::String::from("0");
     // Integer check
-    if (keel::abs(v) < 1e15 && v == static_cast<double>(keel::floor_i64(v)))
-        return keel::format("{}", static_cast<keel::i64>(v));
+    if (keel::abs(v) < 1e15 && v == keel::as<double>(keel::floor_i64(v)))
+        return keel::format("{}", keel::as<keel::i64>(v));
     return keel::String::from(fmtGeneral(v));
 }
 
@@ -5108,7 +5108,7 @@ keel::String Value::formatDisplay(keel::StringRef name, keel::Allocator *alloc) 
     }
     case ValueType::SINGLE: {
         if (isScalar()) {
-            keel::format_into(os, "   {}\n", fmtGeneral(static_cast<double>(*singleData())));
+            keel::format_into(os, "   {}\n", fmtGeneral(keel::as<double>(*singleData())));
         } else if (isEmpty()) {
             os.append("     []\n");
         } else {
@@ -5121,7 +5121,7 @@ keel::String Value::formatDisplay(keel::StringRef name, keel::Allocator *alloc) 
                     os.append("   ");
                     for (keel::usize c = 0; c < d.cols(); ++c) {
                         keel::usize idx = d.is3D() ? d.sub2ind(r, c, p) : d.sub2ind(r, c);
-                        keel::format_into(os, " {}", fmtGeneral(static_cast<double>(fd[idx])));
+                        keel::format_into(os, " {}", fmtGeneral(keel::as<double>(fd[idx])));
                     }
                     os.push_back('\n');
                 }
@@ -5138,7 +5138,7 @@ keel::String Value::formatDisplay(keel::StringRef name, keel::Allocator *alloc) 
     case ValueType::UINT32:
     case ValueType::UINT64: {
         if (isScalar()) {
-            keel::format_into(os, "   {}\n", static_cast<keel::i64>(toScalar()));
+            keel::format_into(os, "   {}\n", keel::as<keel::i64>(toScalar()));
         } else if (isEmpty()) {
             os.append("     []\n");
         } else {
@@ -5160,7 +5160,7 @@ keel::String Value::formatDisplay(keel::StringRef name, keel::Allocator *alloc) 
                         case ValueType::UINT8:  val = static_cast<const keel::u8*>(raw)[idx]; break;
                         case ValueType::UINT16: val = static_cast<const keel::u16*>(raw)[idx]; break;
                         case ValueType::UINT32: val = static_cast<const keel::u32*>(raw)[idx]; break;
-                        case ValueType::UINT64: val = static_cast<keel::i64>(static_cast<const keel::u64*>(raw)[idx]); break;
+                        case ValueType::UINT64: val = keel::as<keel::i64>(static_cast<const keel::u64*>(raw)[idx]); break;
                         default: break;
                         }
                         keel::format_into(os, " {}", val);

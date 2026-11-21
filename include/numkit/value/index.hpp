@@ -21,10 +21,10 @@ inline constexpr keel::f64 kMaxExactDoubleInt = 0x1p53;
 
 // Platform-safe upper bound for any 1-based index or array dimension.
 inline constexpr keel::usize kMaxIndex =
-    (sizeof(keel::usize) >= 8) ? static_cast<keel::usize>((1ULL << 53) - 1ULL)
-                               : static_cast<keel::usize>(0x7fffffffULL);
+    (sizeof(keel::usize) >= 8) ? keel::as<keel::usize>((1ULL << 53) - 1ULL)
+                               : keel::as<keel::usize>(0x7fffffffULL);
 
-inline constexpr keel::f64 kMaxIndexDouble = static_cast<keel::f64>(kMaxIndex);
+inline constexpr keel::f64 kMaxIndexDouble = keel::as<keel::f64>(kMaxIndex);
 
 // Convert a 1-based `f64` subscript into a 0-based `usize` without UB or
 // `std::floor`. Rejects NaN, +/-Inf, `<= 0`, fractional values, and values
@@ -32,8 +32,8 @@ inline constexpr keel::f64 kMaxIndexDouble = static_cast<keel::f64>(kMaxIndex);
 constexpr bool tryIndex0(keel::f64 idx1, keel::usize &out0) noexcept
 {
     if (idx1 >= 1.0 && idx1 <= kMaxIndexDouble) {
-        const keel::usize u = static_cast<keel::usize>(idx1);
-        if (static_cast<keel::f64>(u) == idx1) {
+        const keel::usize u = keel::as<keel::usize>(idx1);
+        if (keel::as<keel::f64>(u) == idx1) {
             out0 = u - 1;
             return true;
         }
@@ -47,8 +47,8 @@ constexpr bool tryIndex0(keel::f64 idx1, keel::usize &out0) noexcept
 constexpr bool tryNonNegSize(keel::f64 d, keel::usize &out) noexcept
 {
     if (d >= 0.0 && d <= kMaxIndexDouble) {
-        const keel::usize u = static_cast<keel::usize>(d);
-        if (static_cast<keel::f64>(u) == d) {
+        const keel::usize u = keel::as<keel::usize>(d);
+        if (keel::as<keel::f64>(u) == d) {
             out = u;
             return true;
         }

@@ -44,11 +44,11 @@ void Dims::setND(const keel::usize *dims, keel::i32 nd)
     if (nd > kMaxRank)
         throw std::runtime_error(
             keel::format_fixed<96>("Maximum array dimensionality ({}) exceeded", kMaxRank).c_str());
-    nd_ = static_cast<keel::u8>(nd);
+    nd_ = keel::as<keel::u8>(nd);
     for (keel::i32 i = 0; i < kInlineCap; ++i)
         inline_[i] = (i < nd) ? dims[i] : 1;
     if (nd > kInlineCap) {
-        const keel::usize extra = static_cast<keel::usize>(nd - kInlineCap);
+        const keel::usize extra = keel::as<keel::usize>(nd - kInlineCap);
         heap_ = keel::default_allocator()->try_alloc_array<keel::usize>(extra);
         if (!heap_)
             throw std::bad_alloc();
@@ -59,7 +59,7 @@ void Dims::setND(const keel::usize *dims, keel::i32 nd)
 void Dims::freeHeap() noexcept
 {
     if (heap_) {
-        const keel::usize extra = static_cast<keel::usize>(nd_ - kInlineCap);
+        const keel::usize extra = keel::as<keel::usize>(nd_ - kInlineCap);
         keel::default_allocator()->free_array(heap_, extra);
         heap_ = nullptr;
     }
@@ -69,7 +69,7 @@ Dims::Dims(const Dims &o) : heap_(nullptr), nd_(o.nd_)
 {
     keel::mem_copy(inline_, o.inline_, sizeof(inline_));
     if (o.heap_) {
-        const keel::usize extra = static_cast<keel::usize>(nd_ - kInlineCap);
+        const keel::usize extra = keel::as<keel::usize>(nd_ - kInlineCap);
         heap_ = keel::default_allocator()->try_alloc_array<keel::usize>(extra);
         if (!heap_)
             throw std::bad_alloc();
@@ -90,7 +90,7 @@ Dims &Dims::operator=(const Dims &o)
     nd_ = o.nd_;
     keel::mem_copy(inline_, o.inline_, sizeof(inline_));
     if (o.heap_) {
-        const keel::usize extra = static_cast<keel::usize>(nd_ - kInlineCap);
+        const keel::usize extra = keel::as<keel::usize>(nd_ - kInlineCap);
         heap_ = keel::default_allocator()->try_alloc_array<keel::usize>(extra);
         if (!heap_)
             throw std::bad_alloc();
@@ -134,7 +134,7 @@ bool Dims::operator==(const Dims &o) const noexcept
 {
     if (!keel::mem_eq(inline_, o.inline_, sizeof(inline_)))
         return false;
-    const keel::i32 n = keel::max(static_cast<keel::i32>(nd_), static_cast<keel::i32>(o.nd_));
+    const keel::i32 n = keel::max(keel::as<keel::i32>(nd_), keel::as<keel::i32>(o.nd_));
     for (keel::i32 i = kInlineCap; i < n; ++i)
         if (dim(i) != o.dim(i)) return false;
     return true;
