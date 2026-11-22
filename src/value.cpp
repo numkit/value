@@ -3076,7 +3076,7 @@ Value Value::complexScalar(keel::c64 v, keel::Allocator *mr)
     h->type = ValueType::COMPLEX;
     h->dims = {1, 1};
     h->buffer = DataBuffer::create(sizeof(keel::c64), h->alloc);
-    *static_cast<keel::c64 *>(h->buffer->data()) = v;
+    *h->buffer->as<keel::c64>() = v;
     m.heap_ = h.release();
     return m;
 }
@@ -3568,7 +3568,7 @@ const keel::f64 *Value::doubleData() const
         throw std::runtime_error("Not a double array");
     if (heap_->type != ValueType::DOUBLE)
         throw std::runtime_error("Not a double array");
-    return heap_->buffer ? static_cast<const keel::f64 *>(heap_->buffer->data()) : nullptr;
+    return heap_->buffer ? heap_->buffer->as<keel::f64>() : nullptr;
 }
 const keel::u8 *Value::logicalData() const
 {
@@ -3582,13 +3582,13 @@ const keel::u8 *Value::logicalData() const
     }
     if (!isHeap() || heap_->type != ValueType::LOGICAL)
         throw std::runtime_error("Not a logical array");
-    return heap_->buffer ? static_cast<const keel::u8 *>(heap_->buffer->data()) : nullptr;
+    return heap_->buffer ? heap_->buffer->as<keel::u8>() : nullptr;
 }
 const char *Value::charData() const
 {
     if (!isHeap() || heap_->type != ValueType::CHAR)
         throw std::runtime_error("Not a char array");
-    return heap_->buffer ? static_cast<const char *>(heap_->buffer->data()) : nullptr;
+    return heap_->buffer ? heap_->buffer->as<char>() : nullptr;
 }
 keel::f64 Value::toScalar() const
 {
@@ -3608,36 +3608,36 @@ keel::f64 Value::toScalar() const
             keel::format_small<96>("Cannot convert {} to scalar", mtypeName(type())).c_str());
     auto *h = heap_;
     if (h->type == ValueType::DOUBLE && h->dims.isScalar())
-        return *static_cast<const keel::f64 *>(h->buffer->data());
+        return *h->buffer->as<keel::f64>();
     if (h->type == ValueType::COMPLEX && h->dims.isScalar()) {
-        auto c = *static_cast<const keel::c64 *>(h->buffer->data());
+        auto c = *h->buffer->as<keel::c64>();
         if (c.imag() != 0.0)
             throw std::runtime_error(
                 "Cannot convert complex with nonzero imaginary part to double scalar");
         return c.real();
     }
     if (h->type == ValueType::LOGICAL && h->dims.isScalar())
-        return (keel::f64) *static_cast<const keel::u8 *>(h->buffer->data());
+        return (keel::f64) *h->buffer->as<keel::u8>();
     if (h->type == ValueType::CHAR && h->dims.isScalar())
-        return (keel::f64) (keel::u8) *static_cast<const char *>(h->buffer->data());
+        return (keel::f64) (keel::u8) *h->buffer->as<char>();
     if (h->type == ValueType::SINGLE && h->dims.isScalar())
-        return (keel::f64) *static_cast<const keel::f32 *>(h->buffer->data());
+        return (keel::f64) *h->buffer->as<keel::f32>();
     if (h->type == ValueType::INT8 && h->dims.isScalar())
-        return (keel::f64) *static_cast<const keel::i8 *>(h->buffer->data());
+        return (keel::f64) *h->buffer->as<keel::i8>();
     if (h->type == ValueType::INT16 && h->dims.isScalar())
-        return (keel::f64) *static_cast<const keel::i16 *>(h->buffer->data());
+        return (keel::f64) *h->buffer->as<keel::i16>();
     if (h->type == ValueType::INT32 && h->dims.isScalar())
-        return (keel::f64) *static_cast<const keel::i32 *>(h->buffer->data());
+        return (keel::f64) *h->buffer->as<keel::i32>();
     if (h->type == ValueType::INT64 && h->dims.isScalar())
-        return (keel::f64) *static_cast<const keel::i64 *>(h->buffer->data());
+        return (keel::f64) *h->buffer->as<keel::i64>();
     if (h->type == ValueType::UINT8 && h->dims.isScalar())
-        return (keel::f64) *static_cast<const keel::u8 *>(h->buffer->data());
+        return (keel::f64) *h->buffer->as<keel::u8>();
     if (h->type == ValueType::UINT16 && h->dims.isScalar())
-        return (keel::f64) *static_cast<const keel::u16 *>(h->buffer->data());
+        return (keel::f64) *h->buffer->as<keel::u16>();
     if (h->type == ValueType::UINT32 && h->dims.isScalar())
-        return (keel::f64) *static_cast<const keel::u32 *>(h->buffer->data());
+        return (keel::f64) *h->buffer->as<keel::u32>();
     if (h->type == ValueType::UINT64 && h->dims.isScalar())
-        return (keel::f64) *static_cast<const keel::u64 *>(h->buffer->data());
+        return (keel::f64) *h->buffer->as<keel::u64>();
     if (h->type == ValueType::OBJECT && h->dims.isScalar()) {
         const auto *st = objectStateConst();
         if (st && st->native)
@@ -3666,21 +3666,21 @@ bool Value::toBool() const
         throw std::runtime_error("Cannot convert empty to bool");
     auto *h = heap_;
     if (h->type == ValueType::LOGICAL && h->dims.isScalar() && h->buffer)
-        return *static_cast<const keel::u8 *>(h->buffer->data()) != 0;
+        return *h->buffer->as<keel::u8>() != 0;
     if (h->type == ValueType::DOUBLE && h->dims.isScalar() && h->buffer) {
-        keel::f64 v = *static_cast<const keel::f64 *>(h->buffer->data());
+        keel::f64 v = *h->buffer->as<keel::f64>();
         if (keel::is_nan(v))
             nanErr();
         return v != 0.0;
     }
     if (h->type == ValueType::COMPLEX && h->dims.isScalar() && h->buffer) {
-        auto c = *static_cast<const keel::c64 *>(h->buffer->data());
+        auto c = *h->buffer->as<keel::c64>();
         if (keel::is_nan(c.real()) || keel::is_nan(c.imag()))
             nanErr();
         return c.real() != 0.0 || c.imag() != 0.0;
     }
     if (h->type == ValueType::DOUBLE && h->buffer) {
-        const keel::f64 *dd = static_cast<const keel::f64 *>(h->buffer->data());
+        const keel::f64 *dd = h->buffer->as<keel::f64>();
         keel::usize n = h->dims.numel();
         bool hasZero = false;
         for (keel::usize i = 0; i < n; ++i) {
@@ -3692,7 +3692,7 @@ bool Value::toBool() const
         return n > 0 && !hasZero;
     }
     if (h->type == ValueType::LOGICAL && h->buffer) {
-        const keel::u8 *ld = static_cast<const keel::u8 *>(h->buffer->data());
+        const keel::u8 *ld = h->buffer->as<keel::u8>();
         keel::usize n = h->dims.numel();
         for (keel::usize i = 0; i < n; ++i)
             if (!ld[i])
@@ -3700,7 +3700,7 @@ bool Value::toBool() const
         return n > 0;
     }
     if (h->type == ValueType::COMPLEX && h->buffer) {
-        const keel::c64 *cd = static_cast<const keel::c64 *>(h->buffer->data());
+        const keel::c64 *cd = h->buffer->as<keel::c64>();
         keel::usize n = h->dims.numel();
         bool hasZero = false;
         for (keel::usize i = 0; i < n; ++i) {
@@ -3736,7 +3736,7 @@ keel::StringRef Value::asStringRef() const
 {
     if (isHeap() && heap_->type == ValueType::CHAR) {
         if (heap_->buffer)
-            return keel::StringRef(static_cast<const char *>(heap_->buffer->data()),
+            return keel::StringRef(heap_->buffer->as<char>(),
                                    heap_->dims.numel());
         return {}; // empty string (1x0 char)
     }
@@ -3809,7 +3809,7 @@ const keel::c64 *Value::complexData() const
 {
     if (!isHeap() || heap_->type != ValueType::COMPLEX)
         throw std::runtime_error("Not a complex array");
-    return heap_->buffer ? static_cast<const keel::c64 *>(heap_->buffer->data()) : nullptr;
+    return heap_->buffer ? heap_->buffer->as<keel::c64>() : nullptr;
 }
 keel::c64 Value::toComplex() const
 {
@@ -3822,7 +3822,7 @@ keel::c64 Value::toComplex() const
     if (!isHeap() || !heap_->buffer)
         throw std::runtime_error("Cannot convert to complex");
     if (heap_->type == ValueType::COMPLEX && heap_->dims.isScalar())
-        return *static_cast<const keel::c64 *>(heap_->buffer->data());
+        return *heap_->buffer->as<keel::c64>();
     if (heap_->dims.isScalar() && (isNumeric() || isLogical() || isChar()))
         return keel::c64(toScalar(), 0.0);
     throw std::runtime_error("Cannot convert to complex");
@@ -3845,21 +3845,21 @@ keel::f64 *Value::doubleDataMut()
     if (!isHeap() || heap_->type != ValueType::DOUBLE)
         throw std::runtime_error("Not a double array");
     detach();
-    return heap_->buffer ? static_cast<keel::f64 *>(heap_->buffer->data()) : nullptr;
+    return heap_->buffer ? heap_->buffer->as<keel::f64>() : nullptr;
 }
 keel::u8 *Value::logicalDataMut()
 {
     if (!isHeap() || heap_->type != ValueType::LOGICAL)
         throw std::runtime_error("Not a logical array");
     detach();
-    return heap_->buffer ? static_cast<keel::u8 *>(heap_->buffer->data()) : nullptr;
+    return heap_->buffer ? heap_->buffer->as<keel::u8>() : nullptr;
 }
 char *Value::charDataMut()
 {
     if (!isHeap() || heap_->type != ValueType::CHAR)
         throw std::runtime_error("Not a char array");
     detach();
-    return heap_->buffer ? static_cast<char *>(heap_->buffer->data()) : nullptr;
+    return heap_->buffer ? heap_->buffer->as<char>() : nullptr;
 }
 void *Value::rawDataMut()
 {
@@ -3875,7 +3875,7 @@ keel::c64 *Value::complexDataMut()
     if (!isHeap() || heap_->type != ValueType::COMPLEX)
         throw std::runtime_error("Not a complex array");
     detach();
-    return heap_->buffer ? static_cast<keel::c64 *>(heap_->buffer->data()) : nullptr;
+    return heap_->buffer ? heap_->buffer->as<keel::c64>() : nullptr;
 }
 
 #define NUMKIT_DEFINE_TYPED_DATA_ACCESSORS(CType, ConstFn, MutFn, VType, ErrLabel) \
@@ -3883,7 +3883,7 @@ keel::c64 *Value::complexDataMut()
     {                                                                               \
         if (!isHeap() || heap_->type != ValueType::VType)                           \
             throw std::runtime_error("Not a " ErrLabel " array");                   \
-        return heap_->buffer ? static_cast<const CType *>(heap_->buffer->data())    \
+        return heap_->buffer ? heap_->buffer->as<CType>()    \
                              : nullptr;                                             \
     }                                                                               \
     CType *Value::MutFn()                                                           \
@@ -3891,7 +3891,7 @@ keel::c64 *Value::complexDataMut()
         if (!isHeap() || heap_->type != ValueType::VType)                           \
             throw std::runtime_error("Not a " ErrLabel " array");                   \
         detach();                                                                   \
-        return heap_->buffer ? static_cast<CType *>(heap_->buffer->data())          \
+        return heap_->buffer ? heap_->buffer->as<CType>()          \
                              : nullptr;                                             \
     }
 
@@ -3926,14 +3926,14 @@ void Value::promoteToComplex(keel::Allocator *mr)
     if (!mr)
         mr = heap_->alloc;
     auto *newBuf = DataBuffer::create(n * sizeof(keel::c64), mr);
-    keel::c64 *dst = static_cast<keel::c64 *>(newBuf->data());
+    keel::c64 *dst = newBuf->as<keel::c64>();
     if (n > 0 && heap_->buffer) {
         if (t == ValueType::SINGLE) {
-            const keel::f32 *src = static_cast<const keel::f32 *>(heap_->buffer->data());
+            const keel::f32 *src = heap_->buffer->as<keel::f32>();
             for (keel::usize i = 0; i < n; ++i)
                 dst[i] = keel::c64(keel::as<keel::f64>(src[i]), 0.0);
         } else {
-            const keel::f64 *src = static_cast<const keel::f64 *>(heap_->buffer->data());
+            const keel::f64 *src = heap_->buffer->as<keel::f64>();
             for (keel::usize i = 0; i < n; ++i)
                 dst[i] = keel::c64(src[i], 0.0);
         }
@@ -4011,7 +4011,7 @@ void Value::resize(keel::usize newRows, keel::usize newCols, keel::Allocator *mr
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
         h->buffer = DataBuffer::create(sizeof(keel::f64), h->alloc);
-        *static_cast<keel::f64 *>(h->buffer->data()) = v;
+        *h->buffer->as<keel::f64>() = v;
         heap_ = h.release();
     }
     if (heap_ == emptyTag() || heap_ == deletedTag()) {
@@ -4089,8 +4089,8 @@ void Value::resize(keel::usize newRows, keel::usize newCols, keel::Allocator *mr
         keel::mem_set(nb2->data(), fill, nb);
     }
     if (heap_->buffer && nb2 && cr > 0 && cc > 0) {
-        const char *s = static_cast<const char *>(heap_->buffer->data());
-        char *d = static_cast<char *>(nb2->data());
+        const char *s = heap_->buffer->as<char>();
+        char *d = nb2->as<char>();
         for (keel::usize c = 0; c < cc; ++c)
             keel::mem_copy(d + c * newRows * es, s + c * oldR * es, cr * es);
     }
@@ -4113,7 +4113,7 @@ void Value::resize3d(keel::usize nr, keel::usize nc, keel::usize np, keel::Alloc
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
         h->buffer = DataBuffer::create(sizeof(keel::f64), h->alloc);
-        *static_cast<keel::f64 *>(h->buffer->data()) = v;
+        *h->buffer->as<keel::f64>() = v;
         heap_ = h.release();
     }
     if (heap_ == emptyTag() || heap_ == deletedTag()) {
@@ -4157,8 +4157,8 @@ void Value::resize3d(keel::usize nr, keel::usize nc, keel::usize np, keel::Alloc
         keel::mem_set(nb2->data(), fill, nb);
     }
     if (heap_->buffer && nb2 && cr > 0 && cc > 0 && cp > 0) {
-        const char *s = static_cast<const char *>(heap_->buffer->data());
-        char *d = static_cast<char *>(nb2->data());
+        const char *s = heap_->buffer->as<char>();
+        char *d = nb2->as<char>();
         for (keel::usize p = 0; p < cp; ++p)
             for (keel::usize c = 0; c < cc; ++c)
                 keel::mem_copy(d + (p * nr * nc + c * nr) * es,
@@ -4189,7 +4189,7 @@ void Value::resizeND(const keel::usize *newDims, keel::i32 nd, keel::Allocator *
         h->type = ValueType::DOUBLE;
         h->dims = {1, 1};
         h->buffer = DataBuffer::create(sizeof(keel::f64), h->alloc);
-        *static_cast<keel::f64 *>(h->buffer->data()) = v;
+        *h->buffer->as<keel::f64>() = v;
         heap_ = h.release();
     }
     // Empty (tag) → fresh DOUBLE heap with the requested shape; no
@@ -4260,8 +4260,8 @@ void Value::resizeND(const keel::usize *newDims, keel::i32 nd, keel::Allocator *
         keel::mem_set(nb2->data(), fill, nb);
     }
     if (heap_->buffer && nb2 && commonTotal > 0) {
-        const char *src = static_cast<const char *>(heap_->buffer->data());
-        char *dst = static_cast<char *>(nb2->data());
+        const char *src = heap_->buffer->as<char>();
+        char *dst = nb2->as<char>();
         Dims commonD(commonDims, commonNd);
         keel::usize coords[kMaxNd] = {0};
         do {
@@ -4286,7 +4286,7 @@ void Value::ensureSize(keel::usize idx, keel::Allocator *mr)
         keel::f64 old = (heap_ == nullptr) ? scalar_ : 0.0;
         *this = matrix(1, idx + 1, ValueType::DOUBLE, mr);
         if (old != 0.0)
-            static_cast<keel::f64 *>(heap_->buffer->data())[0] = old;
+            heap_->buffer->as<keel::f64>()[0] = old;
         return;
     }
     keel::usize need = idx + 1;
@@ -4316,7 +4316,7 @@ void Value::appendScalar(keel::f64 v, keel::Allocator *mr)
         h->dims = {1, 1};
         h->buffer = DataBuffer::create(cap * sizeof(keel::f64), h->alloc);
         h->appendCapacity = cap;
-        keel::f64 *d = static_cast<keel::f64 *>(h->buffer->data());
+        keel::f64 *d = h->buffer->as<keel::f64>();
         keel::mem_zero(d, cap * sizeof(keel::f64));
         d[0] = v;
         heap_ = h.release();
@@ -4332,7 +4332,7 @@ void Value::appendScalar(keel::f64 v, keel::Allocator *mr)
         h->dims = {1, newN};
         h->buffer = DataBuffer::create(cap * sizeof(keel::f64), h->alloc);
         h->appendCapacity = cap;
-        keel::f64 *d = static_cast<keel::f64 *>(h->buffer->data());
+        keel::f64 *d = h->buffer->as<keel::f64>();
         keel::mem_zero(d, cap * sizeof(keel::f64));
         d[0] = old;
         d[1] = v;
@@ -4348,7 +4348,7 @@ void Value::appendScalar(keel::f64 v, keel::Allocator *mr)
     if (!cap && heap_->buffer)
         cap = heap_->buffer->bytes() / sizeof(keel::f64);
     if (newN <= cap && heap_->buffer) {
-        static_cast<keel::f64 *>(heap_->buffer->data())[oldN] = v;
+        heap_->buffer->as<keel::f64>()[oldN] = v;
         heap_->dims = {1, newN};
         return;
     }
@@ -4356,10 +4356,10 @@ void Value::appendScalar(keel::f64 v, keel::Allocator *mr)
     if (nc < 8)
         nc = 8;
     auto *nb = DataBuffer::create(nc * sizeof(keel::f64), mr);
-    keel::f64 *d = static_cast<keel::f64 *>(nb->data());
+    keel::f64 *d = nb->as<keel::f64>();
     keel::zero_n(d, nc);
     if (oldN > 0 && heap_->buffer)
-        keel::copy_n(d, static_cast<const keel::f64 *>(heap_->buffer->data()), oldN);
+        keel::copy_n(d, heap_->buffer->as<keel::f64>(), oldN);
     d[oldN] = v;
     if (heap_->buffer && heap_->buffer->release())
         DataBuffer::destroy(heap_->buffer);
@@ -4384,7 +4384,7 @@ void Value::appendScalarCol(keel::f64 v, keel::Allocator *mr)
         h->dims = {newN, 1};
         h->buffer = DataBuffer::create(cap * sizeof(keel::f64), h->alloc);
         h->appendCapacity = cap;
-        keel::f64 *d = static_cast<keel::f64 *>(h->buffer->data());
+        keel::f64 *d = h->buffer->as<keel::f64>();
         keel::mem_zero(d, cap * sizeof(keel::f64));
         d[0] = v;
         heap_ = h.release();
@@ -4398,7 +4398,7 @@ void Value::appendScalarCol(keel::f64 v, keel::Allocator *mr)
         h->dims = {newN, 1};
         h->buffer = DataBuffer::create(cap * sizeof(keel::f64), h->alloc);
         h->appendCapacity = cap;
-        keel::f64 *d = static_cast<keel::f64 *>(h->buffer->data());
+        keel::f64 *d = h->buffer->as<keel::f64>();
         keel::mem_zero(d, cap * sizeof(keel::f64));
         d[0] = old;
         d[1] = v;
@@ -4414,7 +4414,7 @@ void Value::appendScalarCol(keel::f64 v, keel::Allocator *mr)
     if (!cap && heap_->buffer)
         cap = heap_->buffer->bytes() / sizeof(keel::f64);
     if (newN <= cap && heap_->buffer) {
-        static_cast<keel::f64 *>(heap_->buffer->data())[oldN] = v;
+        heap_->buffer->as<keel::f64>()[oldN] = v;
         heap_->dims = {newN, 1};
         return;
     }
@@ -4422,10 +4422,10 @@ void Value::appendScalarCol(keel::f64 v, keel::Allocator *mr)
     if (nc < 8)
         nc = 8;
     auto *nb = DataBuffer::create(nc * sizeof(keel::f64), mr);
-    keel::f64 *d = static_cast<keel::f64 *>(nb->data());
+    keel::f64 *d = nb->as<keel::f64>();
     keel::zero_n(d, nc);
     if (oldN > 0 && heap_->buffer)
-        keel::copy_n(d, static_cast<const keel::f64 *>(heap_->buffer->data()), oldN);
+        keel::copy_n(d, heap_->buffer->as<keel::f64>(), oldN);
     d[oldN] = v;
     if (heap_->buffer && heap_->buffer->release())
         DataBuffer::destroy(heap_->buffer);

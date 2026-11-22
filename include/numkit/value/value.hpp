@@ -498,14 +498,14 @@ public:
         if (heap_->loadRefCount() == 1
             && heap_->buffer && heap_->buffer->owns()
             && heap_->buffer->refCount() == 1)
-            return static_cast<keel::f64 *>(heap_->buffer->data());
+            return heap_->buffer->as<keel::f64>();
         detach();
-        return static_cast<keel::f64 *>(heap_->buffer->data());
+        return heap_->buffer->as<keel::f64>();
     }
 
     const keel::f64 *doubleDataFast() const
     {
-        return static_cast<const keel::f64 *>(heap_->buffer->data());
+        return heap_->buffer->as<keel::f64>();
     }
 
     void swapHeapBufferUnchecked(Value &other) noexcept

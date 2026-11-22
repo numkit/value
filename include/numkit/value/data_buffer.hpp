@@ -65,6 +65,8 @@ public:
 
     void *data() noexcept { return data_; }
     const void *data() const noexcept { return data_; }
+    template <typename T> T *as() noexcept { return static_cast<T *>(data_); }
+    template <typename T> const T *as() const noexcept { return static_cast<const T *>(data_); }
     keel::usize bytes() const noexcept { return bytes_; }
     keel::Allocator *allocator() const noexcept { return alloc_; }
     bool owns() const noexcept { return owns_; }
