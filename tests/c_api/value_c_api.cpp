@@ -2,6 +2,7 @@
 //
 // Standalone C-ABI and keel::Allocator / keel::c64 tests for `numkit/value`.
 #include <numkit/value/argcheck.hpp>
+#include <keel/core.h>
 #include <numkit/value/c_api.h>
 #include <numkit/value/c_api_bridge.hpp>
 #include <numkit/value/fn_handle.hpp>
@@ -148,14 +149,14 @@ static_assert(checkConstexprIndexGate(), "numkit::tryIndex0 / tryNonNegSize cons
 TEST(NumkitValueCApi, CanonicalIndexAndDimBounds)
 {
     EXPECT_LE(numkit::kMaxIndex,
-              static_cast<keel::usize>(std::numeric_limits<keel::isize>::max()));
+              static_cast<keel::usize>(keel::Limits<keel::isize>::kMax));
 
     EXPECT_EQ(numkit::Value::checkedScalarIndex(1.0), keel::usize{0});
     EXPECT_EQ(numkit::Value::checkedScalarIndex(numkit::kMaxIndexDouble),
               numkit::kMaxIndex - 1);
 
-    const keel::f64 nanv = std::numeric_limits<keel::f64>::quiet_NaN();
-    const keel::f64 infv = std::numeric_limits<keel::f64>::infinity();
+    const keel::f64 nanv = keel::Limits<keel::f64>::quiet_nan();
+    const keel::f64 infv = keel::Limits<keel::f64>::infinity();
     for (keel::f64 bad : {0.0, -0.0, -1.0, 0.5, 1.5, nanv, infv, -infv,
                           numkit::kMaxExactDoubleInt, 1e300}) {
         EXPECT_THROW((void)numkit::Value::checkedScalarIndex(bad), std::runtime_error);

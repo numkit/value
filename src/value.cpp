@@ -11,7 +11,6 @@
 #include <keel/small_array.h>
 #include <keel/string.h>
 
-#include <cmath>
 #include <stdexcept>
 
 namespace numkit {
@@ -489,7 +488,7 @@ keel::usize Value::colonCount(keel::f64 start, keel::f64 step, keel::f64 stop)
     const keel::f64 tol = 3.0 * keel::Limits<keel::f64>::kEpsilon
                            * keel::max(keel::abs(start), keel::abs(stop))
                            / keel::abs(step);
-    keel::f64 n = std::floor(rng + tol) + 1;
+    keel::f64 n = keel::floor(rng + tol) + 1;
     if (n < 0)
         n = 0;
     keel::f64 last = start + (n - 1) * step;
@@ -553,7 +552,7 @@ Value Value::colonRangeTyped(keel::f64 start, keel::f64 step, keel::f64 stop,
       case ValueType::CHAR: {
         char *cp = result.charDataMut();
         for (keel::usize i = 0; i < count; ++i) {
-            keel::f64 v = std::floor(start + keel::as<keel::f64>(i) * step);
+            keel::f64 v = keel::floor(start + keel::as<keel::f64>(i) * step);
             if (v < 0.0) v = 0.0;
             else if (v > 255.0) v = 255.0;
             cp[i] = keel::as<char>(keel::as<keel::u8>(v));
@@ -2379,7 +2378,7 @@ void Value::indexSet2D(const keel::usize *rowIdx, keel::usize nrows,
             const keel::f64 *src = val.doubleData();
             const keel::usize dstRows = d.rows();
             if (rowIdx == nullptr && nrows == dstRows && colIdx == nullptr && ncols == d.cols()) {
-                keel::mem_copy(dst, src, total * sizeof(keel::f64));
+                keel::copy_n(dst, src, total);
                 return;
             }
             if (rowIdx == nullptr) {
@@ -2402,7 +2401,7 @@ void Value::indexSet2D(const keel::usize *rowIdx, keel::usize nrows,
             const keel::c64 *src = val.complexData();
             const keel::usize dstRows = d.rows();
             if (rowIdx == nullptr && nrows == dstRows && colIdx == nullptr && ncols == d.cols()) {
-                keel::mem_copy(dst, src, total * sizeof(keel::c64));
+                keel::copy_n(dst, src, total);
                 return;
             }
             if (rowIdx == nullptr) {
@@ -4358,9 +4357,9 @@ void Value::appendScalar(keel::f64 v, keel::Allocator *mr)
         nc = 8;
     auto *nb = DataBuffer::create(nc * sizeof(keel::f64), mr);
     keel::f64 *d = static_cast<keel::f64 *>(nb->data());
-    keel::mem_zero(d, nc * sizeof(keel::f64));
+    keel::zero_n(d, nc);
     if (oldN > 0 && heap_->buffer)
-        keel::mem_copy(d, heap_->buffer->data(), oldN * sizeof(keel::f64));
+        keel::copy_n(d, static_cast<const keel::f64 *>(heap_->buffer->data()), oldN);
     d[oldN] = v;
     if (heap_->buffer && heap_->buffer->release())
         DataBuffer::destroy(heap_->buffer);
@@ -4424,9 +4423,9 @@ void Value::appendScalarCol(keel::f64 v, keel::Allocator *mr)
         nc = 8;
     auto *nb = DataBuffer::create(nc * sizeof(keel::f64), mr);
     keel::f64 *d = static_cast<keel::f64 *>(nb->data());
-    keel::mem_zero(d, nc * sizeof(keel::f64));
+    keel::zero_n(d, nc);
     if (oldN > 0 && heap_->buffer)
-        keel::mem_copy(d, heap_->buffer->data(), oldN * sizeof(keel::f64));
+        keel::copy_n(d, static_cast<const keel::f64 *>(heap_->buffer->data()), oldN);
     d[oldN] = v;
     if (heap_->buffer && heap_->buffer->release())
         DataBuffer::destroy(heap_->buffer);
