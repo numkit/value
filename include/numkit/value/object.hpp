@@ -5,6 +5,7 @@
 #pragma once
 
 #include <numkit/value/value.hpp>
+#include <numkit/value/error.hpp>
 
 #include <keel/array.h>
 #include <keel/function.h>
@@ -13,7 +14,6 @@
 #include <keel/smart_ptr.h>
 #include <keel/string.h>
 
-#include <stdexcept>
 
 namespace numkit {
 
@@ -29,7 +29,7 @@ struct NativePayload
     virtual keel::Arc<NativePayload> clone(keel::Allocator *alloc = nullptr) const = 0;
     virtual keel::f64 asDouble() const
     {
-        throw std::runtime_error("Cannot read element as double from type 'object'");
+        throw numkit::Error("Cannot read element as double from type 'object'");
     }
     virtual keel::Arc<NativePayload> fromScalarDouble(keel::f64 v,
                                                       keel::Allocator *alloc = nullptr) const

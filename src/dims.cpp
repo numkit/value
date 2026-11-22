@@ -1,11 +1,11 @@
 // src/dims.cpp
 #include <numkit/value/dims.hpp>
+#include <numkit/value/error.hpp>
 
 #include <keel/format.h>
 #include <keel/memory.h>
 
 #include <new>
-#include <stdexcept>
 
 namespace numkit {
 
@@ -42,7 +42,7 @@ void Dims::setND(const keel::usize *dims, keel::i32 nd)
 {
     if (nd < 1) nd = 1;
     if (nd > kMaxRank)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_fixed<96>("Maximum array dimensionality ({}) exceeded", kMaxRank).c_str());
     nd_ = keel::as<keel::u8>(nd);
     for (keel::i32 i = 0; i < kInlineCap; ++i)
@@ -118,7 +118,7 @@ Dims::~Dims()
 keel::usize Dims::sub2indChecked(keel::usize r, keel::usize c) const
 {
     if (r >= inline_[0] || c >= inline_[1])
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_fixed<96>("Index ({},{}) exceeds dimensions", r + 1, c + 1).c_str());
     return c * inline_[0] + r;
 }
@@ -126,7 +126,7 @@ keel::usize Dims::sub2indChecked(keel::usize r, keel::usize c) const
 keel::usize Dims::sub2indChecked(keel::usize r, keel::usize c, keel::usize p) const
 {
     if (r >= inline_[0] || c >= inline_[1] || p >= inline_[2])
-        throw std::runtime_error("Index exceeds dimensions");
+        throw numkit::Error("Index exceeds dimensions");
     return p * inline_[0] * inline_[1] + c * inline_[0] + r;
 }
 

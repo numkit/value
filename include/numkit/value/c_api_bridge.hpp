@@ -7,6 +7,7 @@
 #pragma once
 
 #include <numkit/value/c_api.h>
+#include <numkit/value/error.hpp>
 #include <numkit/value/value.hpp>
 
 #include <keel/memory.h>
@@ -14,7 +15,6 @@
 #include <keel/small_array.h>
 
 #include <exception>
-#include <stdexcept>
 
 namespace numkit::c_abi {
 
@@ -78,7 +78,7 @@ inline void invokeHostCallback(numkit_host_fn fn,
         for (numkit_val *p : rawOuts) {
             numkit_val_release(p);
         }
-        throw std::runtime_error(cbErr.message[0] ? cbErr.message : "Host callback failed");
+        throw numkit::Error(cbErr.message[0] ? cbErr.message : "Host callback failed");
     }
 
     for (keel::usize i = 0; i < rawOuts.size(); ++i) {

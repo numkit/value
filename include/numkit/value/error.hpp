@@ -4,14 +4,13 @@
 // location (line/col/function/context) and a diagnostic identifier.
 #pragma once
 
+#include <keel/exception.h>
 #include <keel/format.h>
 #include <keel/string.h>
 
-#include <stdexcept>
-
 namespace numkit {
 
-class Error : public std::runtime_error
+class Error : public keel::Exception
 {
 public:
     explicit Error(keel::StringRef msg,
@@ -19,8 +18,10 @@ public:
                    keel::i32 col = 0,
                    keel::StringRef funcName = "",
                    keel::StringRef context = "",
-                   keel::StringRef identifier = "")
-        : std::runtime_error(keel::SmallString<256>(msg).c_str())
+                   keel::StringRef identifier = "",
+                   keel::ErrorCode code = keel::ErrorCode::Unknown)
+        : keel::Exception(keel::Error{code, 0})
+        , msg_(msg)
         , line_(line)
         , col_(col)
         , funcName_(funcName)
@@ -29,7 +30,8 @@ public:
     {}
 
     Error(const Error &other)
-        : std::runtime_error(other)
+        : keel::Exception(other)
+        , msg_(other.msg_.clone())
         , line_(other.line_)
         , col_(other.col_)
         , funcName_(other.funcName_.clone())
@@ -40,7 +42,8 @@ public:
     Error &operator=(const Error &other)
     {
         if (this != &other) {
-            std::runtime_error::operator=(other);
+            keel::Exception::operator=(other);
+            msg_ = other.msg_.clone();
             line_ = other.line_;
             col_ = other.col_;
             funcName_ = other.funcName_.clone();
@@ -53,6 +56,15 @@ public:
     Error(Error &&other) noexcept = default;
     Error &operator=(Error &&other) noexcept = default;
     ~Error() noexcept override = default;
+
+    template <typename... Args>
+    [[nodiscard]] static Error format(keel::StringRef fmt, const Args &...args)
+    {
+        return Error(keel::format(fmt, args...));
+    }
+
+    [[nodiscard]] const char *what() const noexcept override { return msg_.c_str(); }
+    [[nodiscard]] keel::StringRef message() const noexcept { return msg_.as_ref(); }
 
     keel::i32 line() const noexcept { return line_; }
     keel::i32 col() const noexcept { return col_; }
@@ -92,6 +104,7 @@ public:
     }
 
 private:
+    keel::SmallString<256> msg_;
     keel::i32 line_;
     keel::i32 col_;
     keel::String funcName_;

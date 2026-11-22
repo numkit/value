@@ -2,6 +2,7 @@
 //
 // Standalone C-ABI and keel::Allocator / keel::c64 tests for `numkit/value`.
 #include <numkit/value/argcheck.hpp>
+#include <numkit/value/error.hpp>
 #include <keel/core.h>
 #include <numkit/value/c_api.h>
 #include <numkit/value/c_api_bridge.hpp>
@@ -159,7 +160,7 @@ TEST(NumkitValueCApi, CanonicalIndexAndDimBounds)
     const keel::f64 infv = keel::Limits<keel::f64>::infinity();
     for (keel::f64 bad : {0.0, -0.0, -1.0, 0.5, 1.5, nanv, infv, -infv,
                           numkit::kMaxExactDoubleInt, 1e300}) {
-        EXPECT_THROW((void)numkit::Value::checkedScalarIndex(bad), std::runtime_error);
+        EXPECT_THROW((void)numkit::Value::checkedScalarIndex(bad), numkit::Error);
     }
 }
 
@@ -218,8 +219,8 @@ TEST(NumkitValueCApi, MdRefLayoutLeftViewsAndInterop)
     EXPECT_DOUBLE_EQ(m(1, 1), 4.0);
 
     // Type mismatch throws
-    EXPECT_THROW(((void)m.asArrayRef<keel::f32>()), std::runtime_error);
-    EXPECT_THROW(((void)m.asMdRef<keel::i32, 2>()), std::runtime_error);
+    EXPECT_THROW(((void)m.asArrayRef<keel::f32>()), numkit::Error);
+    EXPECT_THROW(((void)m.asMdRef<keel::i32, 2>()), numkit::Error);
 
     // 3. 3D volume -> asMdRef<i32, 3> works; asMdRef<i32, 2> throws rank mismatch
     Value vol = Value::matrix3d(2, 3, 4, numkit::ValueType::INT32);
@@ -228,7 +229,7 @@ TEST(NumkitValueCApi, MdRefLayoutLeftViewsAndInterop)
         for (keel::usize c = 0; c < 3; ++c)
             for (keel::usize r = 0; r < 2; ++r)
                 v3mut(r, c, p) = static_cast<keel::i32>(p * 100 + c * 10 + r);
-    EXPECT_THROW(((void)vol.asMdRef<keel::i32, 2>()), std::runtime_error);
+    EXPECT_THROW(((void)vol.asMdRef<keel::i32, 2>()), numkit::Error);
     auto v3c = vol.asMdRef<keel::i32, 3>();
     EXPECT_EQ(v3c.subview(2)(1, 2), 221);
 
@@ -317,7 +318,7 @@ TEST(NumkitValueCApi, ZeroAllocStringRefsAndAllocatorRouting)
     EXPECT_EQ(vObj.objectClassNameRef(), "datetime");
     EXPECT_TRUE(vChar.objectClassNameRef().empty());
 
-    EXPECT_THROW((void)Value::scalar(1.0).asStringRef(), std::runtime_error);
+    EXPECT_THROW((void)Value::scalar(1.0).asStringRef(), numkit::Error);
 
     // ── 2. Allocator routing on owning Value methods & Error ─
     keel::Arena arena(64 * 1024);

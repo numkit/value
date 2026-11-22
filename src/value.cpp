@@ -1,4 +1,5 @@
 #include <numkit/value/shape_ops.hpp>
+#include <numkit/value/error.hpp>
 #include <numkit/value/value.hpp>
 #include <numkit/value/object.hpp> // ObjectState (deepCopy) for object arrays
 
@@ -11,7 +12,6 @@
 #include <keel/small_array.h>
 #include <keel/string.h>
 
-#include <stdexcept>
 
 namespace numkit {
 
@@ -21,7 +21,7 @@ inline keel::usize checkedMulSize(keel::usize a, keel::usize b)
 {
     keel::usize out = 0;
     if (!keel::checked_mul(a, b, out))
-        throw std::runtime_error("Maximum variable size allowed by the program is exceeded");
+        throw numkit::Error("Maximum variable size allowed by the program is exceeded");
     return out;
 }
 
@@ -158,7 +158,7 @@ void Value::throwRankMismatch(keel::i32 actualRank, keel::usize requestedRank)
     keel::SmallString<128> msg;
     keel::format_into(msg, "Value::asMdRef: rank mismatch (value has ndim={}, requested Rank={})",
                       actualRank, requestedRank);
-    throw std::runtime_error(msg.c_str());
+    throw numkit::Error(msg.c_str());
 }
 
 Value::Value(std::initializer_list<keel::f64> il, keel::Allocator *mr)
@@ -322,11 +322,11 @@ Value collapseCsl(Value v)
     if (n == 1)
         return keel::move(v.cslAt(0));  // unwrap the sole element
     if (n == 0) {
-        throw std::runtime_error(
+        throw numkit::Error(
             "Insufficient number of values: a comma-separated list expanded to 0 "
             "values where 1 is required");
     }
-    throw std::runtime_error(
+    throw numkit::Error(
         keel::format_small<128>(
             "Too many values: a comma-separated list expanded to {} values where 1 is required",
             n).c_str());
@@ -394,7 +394,7 @@ keel::String Value::stringElem(keel::usize i, keel::Allocator *alloc) const
 void Value::stringElemSet(keel::usize i, keel::StringRef s)
 {
     if (!isHeap() || heap_->type != ValueType::STRING || !heap_->cellData)
-        throw std::runtime_error("Not a string array");
+        throw numkit::Error("Not a string array");
     detach();
     if (i >= heap_->cellData->size())
         heap_->cellData->resize(i + 1, Value::fromString("", heap_->alloc));
@@ -472,9 +472,9 @@ keel::usize Value::colonCount(keel::f64 start, keel::f64 step, keel::f64 stop)
     if (keel::is_nan(start) || keel::is_nan(step) || keel::is_nan(stop))
         return 0; // MATLAB: NaN in colon produces empty
     if (keel::is_inf(start) || keel::is_inf(stop))
-        throw std::runtime_error("Maximum variable size allowed by the program is exceeded");
+        throw numkit::Error("Maximum variable size allowed by the program is exceeded");
     if (step == 0.0)
-        throw std::runtime_error("Colon step cannot be zero");
+        throw numkit::Error("Colon step cannot be zero");
     if (keel::is_inf(step))
         return (step > 0 && stop >= start) || (step < 0 && stop <= start) ? 1 : 0;
     if ((step > 0 && stop < start) || (step < 0 && stop > start))
@@ -570,7 +570,7 @@ Value Value::colonRangeTyped(keel::f64 start, keel::f64 step, keel::f64 stop,
       case ValueType::UINT32:  write_loop(result.uint32DataMut(),  keel::u32{}); break;
       case ValueType::UINT64:  write_loop(result.uint64DataMut(),  keel::u64{}); break;
       default:
-        throw std::runtime_error("colonRangeTyped: unsupported output type");
+        throw numkit::Error("colonRangeTyped: unsupported output type");
     }
     return result;
 }
@@ -613,7 +613,7 @@ static ValueType promoteNumericType(const Value *elems, keel::usize count)
         case ValueType::LOGICAL:
             break;
         default:
-            throw std::runtime_error(
+            throw numkit::Error(
                 keel::format_small<96>("Concatenation not supported for type '{}'",
                                        mtypeName(elems[i].type())).c_str());
         }
@@ -686,12 +686,12 @@ keel::f64 Value::elemAsDouble(keel::usize idx) const
         const auto *st = objectStateAt(idx);
         if (st && st->native)
             return st->native->asDouble();
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Cannot read element as double from type '{}'",
                                    mtypeName(type())).c_str());
     }
     default:
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Cannot read element as double from type '{}'",
                                    mtypeName(type())).c_str());
     }
@@ -712,7 +712,7 @@ static keel::c64 readElemAsComplex(const Value &v, keel::usize idx)
     case ValueType::UINT8: case ValueType::UINT16: case ValueType::UINT32: case ValueType::UINT64:
         return keel::c64(v.elemAsDouble(idx), 0.0);
     default:
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Cannot read element as complex from type '{}'",
                                    mtypeName(v.type())).c_str());
     }
@@ -735,7 +735,7 @@ static keel::u8 readElemAsLogical(const Value &v, keel::usize idx)
     case ValueType::COMPLEX:
         return (v.complexData()[idx] != keel::c64(0.0, 0.0)) ? 1 : 0;
     default:
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Cannot read element as logical from type '{}'",
                                    mtypeName(v.type())).c_str());
     }
@@ -765,7 +765,7 @@ static void matchDim(keel::usize &out, keel::usize elem, bool &set)
         out = elem;
         set = true;
     } else if (out != elem && elem != 1 && out != 1) {
-        throw std::runtime_error(
+        throw numkit::Error(
             "Dimensions of arrays being concatenated are not consistent");
     }
     if (elem > 1)
@@ -781,7 +781,7 @@ static keel::i32 collectHigherDims(const Value *elems, keel::usize count, keel::
         if (!elems[i].isEmpty())
             maxNd = keel::max(maxNd, elems[i].dims().ndim());
     if (maxNd > Dims::kMaxRank)
-        throw std::runtime_error("Maximum array dimensionality exceeded");
+        throw numkit::Error("Maximum array dimensionality exceeded");
     for (keel::i32 k = 2; k < maxNd; ++k) {
         keel::usize dk = 1;
         bool set = false;
@@ -837,7 +837,7 @@ Value Value::concatStructs(const Value *elems, keel::usize count, bool vertical,
         if (elems[i].isEmpty())
             continue;
         if (!elems[i].isStruct())
-            throw std::runtime_error(
+            throw numkit::Error(
                 keel::format_small<128>("Conversion to struct from {} is not possible",
                                         mtypeName(elems[i].type())).c_str());
         ops.push_back(&elems[i]);
@@ -862,7 +862,7 @@ Value Value::concatStructs(const Value *elems, keel::usize count, bool vertical,
                 }
             }
             if (!same)
-                throw std::runtime_error(
+                throw numkit::Error(
                     "Names of fields in structure arrays being concatenated "
                     "do not match. Concatenation of structure arrays "
                     "requires that these arrays have the same set of "
@@ -884,7 +884,7 @@ Value Value::concatStructs(const Value *elems, keel::usize count, bool vertical,
         } else {
             const keel::usize other = vertical ? c : r;
             if (bSet && b != other)
-                throw std::runtime_error(
+                throw numkit::Error(
                     "Dimensions of arrays being concatenated are not "
                     "consistent");
             b = other;
@@ -961,7 +961,7 @@ Value Value::concatObjects(const Value *elems, keel::usize count, bool vertical,
                     Value::objectArray(clsName, elems[i].dims(), keel::move(states), handle, mr));
                 continue;
             }
-            throw std::runtime_error(
+            throw numkit::Error(
                 "Cannot concatenate an object with a non-object value");
         }
         const keel::StringRef otherCls = elems[i].objectClassNameRef();
@@ -972,7 +972,7 @@ Value Value::concatObjects(const Value *elems, keel::usize count, bool vertical,
             if (isGraphicsCls(clsName) && isGraphicsCls(otherCls)) {
                 clsName = "matlab.graphics.Graphics";
             } else {
-                throw std::runtime_error(
+                throw numkit::Error(
                     "Cannot concatenate objects of different classes");
             }
         }
@@ -1002,7 +1002,7 @@ Value Value::concatObjects(const Value *elems, keel::usize count, bool vertical,
         keel::usize cols = 0;
         for (const Value *o : ops) {
             if (o->heap_->dims.rows() != rows)
-                throw std::runtime_error(
+                throw numkit::Error(
                     "Dimensions of arrays being concatenated are not consistent");
             cols += o->heap_->dims.cols();
             for (const auto &st : o->heap_->objStates)
@@ -1016,7 +1016,7 @@ Value Value::concatObjects(const Value *elems, keel::usize count, bool vertical,
         keel::usize rows = 0;
         for (const Value *o : ops) {
             if (o->heap_->dims.cols() != cols)
-                throw std::runtime_error(
+                throw numkit::Error(
                     "Dimensions of arrays being concatenated are not consistent");
             rows += o->heap_->dims.rows();
         }
@@ -1370,7 +1370,7 @@ Value Value::vertcat(const Value *elems, keel::usize count, keel::Allocator *mr)
                     for (keel::usize r = 0; r < eR; ++r)
                         result.stringElemSet((c) * totalRows + (rowOff + r), s);
             } else {
-                throw std::runtime_error(
+                throw numkit::Error(
                     "String concatenation: row element must be string, char, or scalar");
             }
             rowOff += eR;
@@ -1484,7 +1484,7 @@ Value Value::elemAt(keel::usize idx, keel::Allocator *mr) const
         return r;
     }
     default:
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("elemAt not supported for type '{}'", mtypeName(t)).c_str());
     }
 }
@@ -1493,7 +1493,7 @@ Value Value::elemAt(keel::usize idx, keel::Allocator *mr) const
 Value Value::reshape(keel::usize rows, keel::usize cols, keel::Allocator *mr) const
 {
     if (rows * cols != numel())
-        throw std::runtime_error("reshape: number of elements must not change");
+        throw numkit::Error("reshape: number of elements must not change");
     if (numel() == 1)
         return *this;  // 1x1 reshape is a no-op (matrix(1,1,DOUBLE) is inline, no buffer)
     if (isObject())
@@ -1647,7 +1647,7 @@ Value Value::indexGet(const keel::usize *indices, keel::usize count, keel::Alloc
         return result;
     }
     default:
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("indexGet not supported for type '{}'", mtypeName(t)).c_str());
     }
 }
@@ -1720,7 +1720,7 @@ Value Value::indexGet2D(const keel::usize *rowIdx, keel::usize nrows,
 
     keel::usize es = elementSize(t);
     if (es == 0)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("indexGet2D not supported for type '{}'", mtypeName(t)).c_str());
 
     auto &d = dims();
@@ -1839,7 +1839,7 @@ Value Value::indexGet3D(const keel::usize *rowIdx, keel::usize nrows,
 
     keel::usize es = elementSize(t);
     if (es == 0)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("indexGet3D not supported for type '{}'", mtypeName(t)).c_str());
 
     auto &d = dims();
@@ -1908,7 +1908,7 @@ Value Value::indexGetND(const keel::usize *const *perDimIdx,
     const bool isObj = (t == ValueType::OBJECT);
     keel::usize es = (isCell || isObj) ? 0 : elementSize(t);
     if (!isCell && !isObj && es == 0)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("indexGetND not supported for type '{}'", mtypeName(t)).c_str());
 
     // Build output shape from perDimCount; trailing zero-extent dims
@@ -1934,7 +1934,7 @@ Value Value::indexGetND(const keel::usize *const *perDimIdx,
     constexpr keel::i32 kMaxNd = Dims::kMaxRank;
     keel::usize srcStrides[kMaxNd];
     if (srcDims.ndim() > kMaxNd)
-        throw std::runtime_error("indexGetND: source rank exceeds 32");
+        throw numkit::Error("indexGetND: source rank exceeds 32");
     computeStridesColMajor(srcDims, srcStrides);
     const keel::i32 srcNd = srcDims.ndim();
 
@@ -1945,7 +1945,7 @@ Value Value::indexGetND(const keel::usize *const *perDimIdx,
         const keel::usize lim = (i < srcNd) ? srcDims.dim(i) : 1;
         for (keel::usize k = 0; k < perDimCount[i]; ++k)
             if (perDimIdx[i][k] >= lim)
-                throw std::runtime_error(
+                throw numkit::Error(
                     keel::format_small<128>(
                         "Index exceeds array dimensions (dim {}: {} > {})",
                         i + 1, perDimIdx[i][k] + 1, lim).c_str());
@@ -2003,7 +2003,7 @@ Value Value::logicalIndex(const keel::u8 *mask, keel::usize maskLen, keel::Alloc
     // Check for true values beyond array bounds
     for (keel::usize i = numel(); i < maskLen; ++i)
         if (mask[i])
-            throw std::runtime_error("Index exceeds the number of array elements");
+            throw numkit::Error("Index exceeds the number of array elements");
     keel::usize n = keel::min(maskLen, numel());
     // Count selected elements
     keel::usize selected = 0;
@@ -2117,7 +2117,7 @@ Value Value::logicalIndex(const keel::u8 *mask, keel::usize maskLen, keel::Alloc
         return result;
     }
     default:
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("logicalIndex not supported for type '{}'", mtypeName(t)).c_str());
     }
 }
@@ -2130,7 +2130,7 @@ keel::usize Value::checkedScalarIndex(keel::f64 v)
 {
     keel::usize out0 = 0;
     if (!tryIndex0(v, out0))
-        throw std::runtime_error(
+        throw numkit::Error(
             "Array indices must be positive integers or logical values.");
     return out0;
 }
@@ -2147,7 +2147,7 @@ keel::Array<keel::usize> Value::resolveIndices(const Value &idx, keel::usize dim
         const keel::u8 *m = idx.logicalData();
         for (keel::usize i = dimSize; i < idx.numel(); ++i)
             if (m[i])
-                throw std::runtime_error("Index exceeds the number of array elements");
+                throw numkit::Error("Index exceeds the number of array elements");
         keel::usize n = keel::min(idx.numel(), dimSize);
         for (keel::usize i = 0; i < n; ++i)
             if (m[i])
@@ -2155,7 +2155,7 @@ keel::Array<keel::usize> Value::resolveIndices(const Value &idx, keel::usize dim
     } else if (idx.isDoubleScalar()) {
         keel::usize ii = Value::checkedScalarIndex(idx.toScalar());
         if (ii >= dimSize)
-            throw std::runtime_error("Index exceeds array dimensions");
+            throw numkit::Error("Index exceeds array dimensions");
         out.push_back(ii);
     } else {
         // Any non-logical numeric index: double, single, integer types, or a
@@ -2166,7 +2166,7 @@ keel::Array<keel::usize> Value::resolveIndices(const Value &idx, keel::usize dim
         for (keel::usize i = 0; i < idx.numel(); ++i) {
             keel::usize ii = Value::checkedScalarIndex(idx.elemAsDouble(i));
             if (ii >= dimSize)
-                throw std::runtime_error("Index exceeds array dimensions");
+                throw numkit::Error("Index exceeds array dimensions");
             out.push_back(ii);
         }
     }
@@ -2216,7 +2216,7 @@ static void writeElem(Value &dst, keel::usize idx, const Value &val, keel::usize
         break;
     case ValueType::LOGICAL: {
         if (val.type() == ValueType::COMPLEX) // MATLAB errors; don't drop imag silently
-            throw std::runtime_error("keel::c64 values cannot be converted to logicals.");
+            throw numkit::Error("keel::c64 values cannot be converted to logicals.");
         keel::f64 dv = val.elemAsDouble(valIdx);
         dst.logicalDataMut()[idx] = keel::as<keel::u8>(dv != 0.0);
         break;
@@ -2247,7 +2247,7 @@ static void writeElem(Value &dst, keel::usize idx, const Value &val, keel::usize
     case ValueType::UINT64: dst.uint64DataMut()[idx] = roundSaturateInt<keel::u64>(val.elemAsDouble(valIdx)); break;
     case ValueType::SINGLE: dst.singleDataMut()[idx] = keel::as<keel::f32>(val.elemAsDouble(valIdx)); break;
     default:
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Indexed assignment not supported for type '{}'",
                                    mtypeName(t)).c_str());
     }
@@ -2266,7 +2266,7 @@ static void writeScalar(Value &dst, keel::usize idx, const Value &val)
         break;
     case ValueType::LOGICAL:
         if (val.type() == ValueType::COMPLEX) // MATLAB errors; don't drop imag silently
-            throw std::runtime_error("keel::c64 values cannot be converted to logicals.");
+            throw numkit::Error("keel::c64 values cannot be converted to logicals.");
         dst.logicalDataMut()[idx] = keel::as<keel::u8>(val.toScalar() != 0.0);
         break;
     case ValueType::CHAR:
@@ -2292,7 +2292,7 @@ static void writeScalar(Value &dst, keel::usize idx, const Value &val)
     case ValueType::UINT64: dst.uint64DataMut()[idx] = roundSaturateInt<keel::u64>(val.toScalar()); break;
     case ValueType::SINGLE: dst.singleDataMut()[idx] = keel::as<keel::f32>(val.toScalar()); break;
     default:
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Indexed assignment not supported for type '{}'",
                                    mtypeName(t)).c_str());
     }
@@ -2316,7 +2316,7 @@ void Value::indexSet(const keel::usize *indices, keel::usize count, const Value 
             writeScalar(*this, indices[k], val);
     } else {
         if (count != val.numel())
-            throw std::runtime_error(
+            throw numkit::Error(
                 "Unable to perform assignment because the left and right sides have a different number of elements");
         for (keel::usize k = 0; k < count; ++k)
             writeElem(*this, indices[k], val, k);
@@ -2369,7 +2369,7 @@ void Value::indexSet2D(const keel::usize *rowIdx, keel::usize nrows,
     } else {
         keel::usize total = nrows * ncols;
         if (total != val.numel())
-            throw std::runtime_error(
+            throw numkit::Error(
                 "Unable to perform assignment because the left and right sides have a different number of elements");
         if (total == 0)
             return;
@@ -2460,7 +2460,7 @@ void Value::indexSet3D(const keel::usize *rowIdx, keel::usize nrows,
     } else {
         keel::usize total = nrows * ncols * npages;
         if (total != val.numel())
-            throw std::runtime_error(
+            throw numkit::Error(
                 "Unable to perform assignment because the left and right sides have a different number of elements");
         if (total == 0)
             return;
@@ -2563,7 +2563,7 @@ void Value::indexSetND(const keel::usize *const *perDimIdx,
 
     constexpr keel::i32 kMaxNd = Dims::kMaxRank;
     if (dims().ndim() > kMaxNd)
-        throw std::runtime_error("indexSetND: target rank exceeds 32");
+        throw numkit::Error("indexSetND: target rank exceeds 32");
 
     // Auto-grow: expand any axis whose largest assignment index exceeds
     // current dim, including new trailing axes (rank goes up). Matches
@@ -2572,7 +2572,7 @@ void Value::indexSetND(const keel::usize *const *perDimIdx,
         const keel::i32 curNd = dims().ndim();
         const keel::i32 newNd = keel::max(nd, curNd);
         if (newNd > kMaxNd)
-            throw std::runtime_error("indexSetND: target rank exceeds 32");
+            throw numkit::Error("indexSetND: target rank exceeds 32");
         keel::usize need[kMaxNd];
         for (keel::i32 i = 0; i < newNd; ++i)
             need[i] = (i < curNd) ? dims().dim(i) : 1;
@@ -2611,7 +2611,7 @@ void Value::indexSetND(const keel::usize *const *perDimIdx,
         } while (incrementCoords(coords, iter));
     } else {
         if (total != val.numel())
-            throw std::runtime_error(
+            throw numkit::Error(
                 "Unable to perform assignment because the left and right sides have a different number of elements");
         keel::usize k = 0;
         do {
@@ -2637,7 +2637,7 @@ void Value::indexDelete(const keel::usize *indices, keel::usize count, keel::All
     // structurally-incompatible types.
     if (t == ValueType::STRUCT || t == ValueType::FUNC_HANDLE || t == ValueType::EMPTY
         || t == ValueType::STRING)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Delete indexing not supported for type '{}'", mtypeName(t)).c_str());
 
     keel::usize n = numel();
@@ -2700,7 +2700,7 @@ void Value::indexDelete2D(const keel::usize *rowIdx, keel::usize nrows,
     ValueType t = type();
     if (t == ValueType::STRUCT || t == ValueType::FUNC_HANDLE || t == ValueType::EMPTY
         || t == ValueType::STRING)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Delete indexing not supported for type '{}'", mtypeName(t)).c_str());
 
     keel::usize R = dims().rows(), C = dims().cols();
@@ -2804,7 +2804,7 @@ void Value::indexDelete2D(const keel::usize *rowIdx, keel::usize nrows,
             *this = keel::move(result);
         }
     } else {
-        throw std::runtime_error(
+        throw numkit::Error(
             "Cannot delete from both rows and columns simultaneously");
     }
 }
@@ -2817,7 +2817,7 @@ void Value::indexDelete3D(const keel::usize *rowIdx, keel::usize nrows,
     ValueType t = type();
     if (t == ValueType::STRUCT || t == ValueType::FUNC_HANDLE || t == ValueType::EMPTY
         || t == ValueType::STRING)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Delete indexing not supported for type '{}'", mtypeName(t)).c_str());
 
     keel::usize R = dims().rows(), C = dims().cols(), P = dims().pages();
@@ -2828,7 +2828,7 @@ void Value::indexDelete3D(const keel::usize *rowIdx, keel::usize nrows,
     bool fullR = (nrows == R), fullC = (ncols == C), fullP = (npages == P);
     keel::i32 partialCount = (!fullR ? 1 : 0) + (!fullC ? 1 : 0) + (!fullP ? 1 : 0);
     if (partialCount != 1)
-        throw std::runtime_error(
+        throw numkit::Error(
             "3D delete requires exactly one dimension to be partially selected");
 
     if (!fullP) {
@@ -2977,13 +2977,13 @@ void Value::indexDeleteND(const keel::usize *const *perDimIdx,
     ValueType t = type();
     if (t == ValueType::STRUCT || t == ValueType::FUNC_HANDLE || t == ValueType::EMPTY
         || t == ValueType::STRING)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Delete indexing not supported for type '{}'", mtypeName(t)).c_str());
 
     auto &d = dims();
     constexpr keel::i32 kMaxNd = Dims::kMaxRank;
     if (d.ndim() > kMaxNd)
-        throw std::runtime_error("indexDeleteND: target rank exceeds 32");
+        throw numkit::Error("indexDeleteND: target rank exceeds 32");
     const keel::i32 srcNd = d.ndim();
 
     // Find the partial axis. All other axes must be the full range.
@@ -2992,16 +2992,16 @@ void Value::indexDeleteND(const keel::usize *const *perDimIdx,
         const keel::usize lim = (i < srcNd) ? d.dim(i) : 1;
         if (perDimCount[i] != lim) {
             if (partial != -1)
-                throw std::runtime_error(
+                throw numkit::Error(
                     "ND delete requires exactly one dimension to be partially selected");
             partial = i;
         }
     }
     if (partial == -1)
-        throw std::runtime_error(
+        throw numkit::Error(
             "ND delete requires exactly one dimension to be partially selected");
     if (partial >= srcNd)
-        throw std::runtime_error(
+        throw numkit::Error(
             "ND delete: partial axis exceeds source rank");
 
     keel::Allocator *tmpAlloc = mr ? mr : keel::default_allocator();
@@ -3022,7 +3022,7 @@ void Value::indexDeleteND(const keel::usize *const *perDimIdx,
     const bool isCell = (t == ValueType::CELL);
     const keel::usize es = isCell ? 0 : elementSize(t);
     if (!isCell && es == 0)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("indexDeleteND not supported for type '{}'", mtypeName(t)).c_str());
 
     const bool sc = isSingleComplex();
@@ -3248,7 +3248,7 @@ Value Value::objectGather(const keel::usize *srcLinear, const Dims &resultDims,
     for (keel::usize k = 0; k < n; ++k) {
         keel::usize s = srcLinear[k];
         if (s >= heap_->objStates.size())
-            throw std::runtime_error("Index exceeds the number of array elements.");
+            throw numkit::Error("Index exceeds the number of array elements.");
         const auto &src = heap_->objStates[s];
         // value class → independent copy (safe to mutate); handle → alias.
         h->objStates.push_back((handle || !src) ? src : src->deepCopy(mr));
@@ -3292,7 +3292,7 @@ Value Value::objectConcatN(const Value *parts, keel::usize count, const Dims &ou
         if (parts[i].isEmpty())
             continue;
         if (!parts[i].isObject())
-            throw std::runtime_error("Cannot concatenate an object with a non-object value");
+            throw numkit::Error("Cannot concatenate an object with a non-object value");
         if (!found) {
             clsName = parts[i].objectClassNameRef();
             handle = parts[i].objectIsHandle();
@@ -3306,7 +3306,7 @@ Value Value::objectConcatN(const Value *parts, keel::usize count, const Dims &ou
                 if (isGraphicsCls(clsName) && isGraphicsCls(otherCls)) {
                     clsName = "matlab.graphics.Graphics";
                 } else {
-                    throw std::runtime_error("Cannot concatenate objects of different classes");
+                    throw numkit::Error("Cannot concatenate objects of different classes");
                 }
             }
         }
@@ -3379,7 +3379,7 @@ void Value::objectAssignLinear(keel::ArrayRef<keel::usize> pos, const Value &rhs
     const keel::usize rn = rhs.isObject() ? rhs.objectCount() : 0;
     const bool broadcast = (rn == 1);
     if (!broadcast && rn != pos.size())
-        throw std::runtime_error(
+        throw numkit::Error(
             "Unable to perform assignment because the left and right sides have a "
             "different number of elements.");
     auto rhsSlot = [&](keel::usize k) -> keel::Arc<ObjectState> {
@@ -3395,7 +3395,7 @@ void Value::objectAssignLinear(keel::ArrayRef<keel::usize> pos, const Value &rhs
         // Out-of-bounds linear growth is only defined for a vector (or empty);
         // growing a proper matrix via a single linear index is ambiguous.
         if (heap_->dims.rows() > 1 && heap_->dims.cols() > 1)
-            throw std::runtime_error(
+            throw numkit::Error(
                 "Unable to grow a 2-D object array via a single linear index");
         const bool col = heap_->dims.cols() == 1 && heap_->dims.rows() > 1;
         keel::Arc<ObjectState> fillState = sharedOf(fill);
@@ -3446,7 +3446,7 @@ void Value::objectAssignND(keel::ArrayRef<keel::Array<keel::usize>> perDim,
     const keel::usize rn = rhs.isObject() ? rhs.objectCount() : 0;
     const bool broadcast = (rn == 1);
     if (!broadcast && rn != ntargets)
-        throw std::runtime_error(
+        throw numkit::Error(
             "Unable to perform assignment because the left and right sides have a "
             "different number of elements.");
     auto rhsSlot = [&](keel::usize k) -> keel::Arc<ObjectState> {
@@ -3565,9 +3565,9 @@ const keel::f64 *Value::doubleData() const
     if (heap_ == nullptr)
         return &scalar_;
     if (isTag())
-        throw std::runtime_error("Not a double array");
+        throw numkit::Error("Not a double array");
     if (heap_->type != ValueType::DOUBLE)
-        throw std::runtime_error("Not a double array");
+        throw numkit::Error("Not a double array");
     return heap_->buffer ? heap_->buffer->as<keel::f64>() : nullptr;
 }
 const keel::u8 *Value::logicalData() const
@@ -3581,13 +3581,13 @@ const keel::u8 *Value::logicalData() const
         return &f;
     }
     if (!isHeap() || heap_->type != ValueType::LOGICAL)
-        throw std::runtime_error("Not a logical array");
+        throw numkit::Error("Not a logical array");
     return heap_->buffer ? heap_->buffer->as<keel::u8>() : nullptr;
 }
 const char *Value::charData() const
 {
     if (!isHeap() || heap_->type != ValueType::CHAR)
-        throw std::runtime_error("Not a char array");
+        throw numkit::Error("Not a char array");
     return heap_->buffer ? heap_->buffer->as<char>() : nullptr;
 }
 keel::f64 Value::toScalar() const
@@ -3604,7 +3604,7 @@ keel::f64 Value::toScalar() const
             return st->native->asDouble();
     }
     if (!isHeap() || !heap_->buffer)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Cannot convert {} to scalar", mtypeName(type())).c_str());
     auto *h = heap_;
     if (h->type == ValueType::DOUBLE && h->dims.isScalar())
@@ -3612,7 +3612,7 @@ keel::f64 Value::toScalar() const
     if (h->type == ValueType::COMPLEX && h->dims.isScalar()) {
         auto c = *h->buffer->as<keel::c64>();
         if (c.imag() != 0.0)
-            throw std::runtime_error(
+            throw numkit::Error(
                 "Cannot convert complex with nonzero imaginary part to double scalar");
         return c.real();
     }
@@ -3643,7 +3643,7 @@ keel::f64 Value::toScalar() const
         if (st && st->native)
             return st->native->asDouble();
     }
-    throw std::runtime_error(
+    throw numkit::Error(
         keel::format_small<96>("Cannot convert {} to scalar", mtypeName(type())).c_str());
 }
 bool Value::toBool() const
@@ -3651,7 +3651,7 @@ bool Value::toBool() const
     // MATLAB: a NaN in a conditional ("if"/"while"/logical()) is an error,
     // "NaN values cannot be converted to logicals." — NOT silently true/false.
     auto nanErr = [] {
-        throw std::runtime_error("NaN values cannot be converted to logicals.");
+        throw numkit::Error("NaN values cannot be converted to logicals.");
     };
     if (heap_ == nullptr) {
         if (keel::is_nan(scalar_))
@@ -3663,7 +3663,7 @@ bool Value::toBool() const
     if (heap_ == logicalFalseTag())
         return false;
     if (heap_ == emptyTag() || heap_ == deletedTag())
-        throw std::runtime_error("Cannot convert empty to bool");
+        throw numkit::Error("Cannot convert empty to bool");
     auto *h = heap_;
     if (h->type == ValueType::LOGICAL && h->dims.isScalar() && h->buffer)
         return *h->buffer->as<keel::u8>() != 0;
@@ -3729,7 +3729,7 @@ bool Value::toBool() const
         }
         return n > 0 && !hasZero;
     }
-    throw std::runtime_error(
+    throw numkit::Error(
         keel::format_small<96>("Cannot convert {} to bool", mtypeName(type())).c_str());
 }
 keel::StringRef Value::asStringRef() const
@@ -3747,7 +3747,7 @@ keel::StringRef Value::asStringRef() const
     }
     if (isHeap() && heap_->type == ValueType::FUNC_HANDLE && heap_->funcName)
         return heap_->funcName->as_ref();
-    throw std::runtime_error("Not a char array");
+    throw numkit::Error("Not a char array");
 }
 keel::String Value::toString(keel::Allocator *alloc) const
 {
@@ -3790,7 +3790,7 @@ const Value &Value::funcHandleCapture(keel::usize i) const
 {
     if (!isHeap() || heap_->type != ValueType::FUNC_HANDLE || !heap_->cellData
         || i >= heap_->cellData->size())
-        throw std::runtime_error("funcHandleCapture: index out of range");
+        throw numkit::Error("funcHandleCapture: index out of range");
     return (*heap_->cellData)[i];
 }
 void Value::setFuncHandleCaptures(const Value *captures, keel::usize count)
@@ -3808,7 +3808,7 @@ void Value::setFuncHandleCaptures(const Value *captures, keel::usize count)
 const keel::c64 *Value::complexData() const
 {
     if (!isHeap() || heap_->type != ValueType::COMPLEX)
-        throw std::runtime_error("Not a complex array");
+        throw numkit::Error("Not a complex array");
     return heap_->buffer ? heap_->buffer->as<keel::c64>() : nullptr;
 }
 keel::c64 Value::toComplex() const
@@ -3820,17 +3820,17 @@ keel::c64 Value::toComplex() const
     if (heap_ == logicalFalseTag())
         return keel::c64(0.0, 0.0);
     if (!isHeap() || !heap_->buffer)
-        throw std::runtime_error("Cannot convert to complex");
+        throw numkit::Error("Cannot convert to complex");
     if (heap_->type == ValueType::COMPLEX && heap_->dims.isScalar())
         return *heap_->buffer->as<keel::c64>();
     if (heap_->dims.isScalar() && (isNumeric() || isLogical() || isChar()))
         return keel::c64(toScalar(), 0.0);
-    throw std::runtime_error("Cannot convert to complex");
+    throw numkit::Error("Cannot convert to complex");
 }
 keel::c64 Value::complexElem(keel::usize i) const
 {
     if (i >= numel())
-        throw std::runtime_error("keel::c64 index out of bounds");
+        throw numkit::Error("keel::c64 index out of bounds");
     return complexData()[i];
 }
 keel::c64 Value::complexElem(keel::usize r, keel::usize c) const
@@ -3843,21 +3843,21 @@ keel::f64 *Value::doubleDataMut()
     if (heap_ == nullptr)
         return &scalar_;
     if (!isHeap() || heap_->type != ValueType::DOUBLE)
-        throw std::runtime_error("Not a double array");
+        throw numkit::Error("Not a double array");
     detach();
     return heap_->buffer ? heap_->buffer->as<keel::f64>() : nullptr;
 }
 keel::u8 *Value::logicalDataMut()
 {
     if (!isHeap() || heap_->type != ValueType::LOGICAL)
-        throw std::runtime_error("Not a logical array");
+        throw numkit::Error("Not a logical array");
     detach();
     return heap_->buffer ? heap_->buffer->as<keel::u8>() : nullptr;
 }
 char *Value::charDataMut()
 {
     if (!isHeap() || heap_->type != ValueType::CHAR)
-        throw std::runtime_error("Not a char array");
+        throw numkit::Error("Not a char array");
     detach();
     return heap_->buffer ? heap_->buffer->as<char>() : nullptr;
 }
@@ -3873,7 +3873,7 @@ void *Value::rawDataMut()
 keel::c64 *Value::complexDataMut()
 {
     if (!isHeap() || heap_->type != ValueType::COMPLEX)
-        throw std::runtime_error("Not a complex array");
+        throw numkit::Error("Not a complex array");
     detach();
     return heap_->buffer ? heap_->buffer->as<keel::c64>() : nullptr;
 }
@@ -3882,14 +3882,14 @@ keel::c64 *Value::complexDataMut()
     const CType *Value::ConstFn() const                                             \
     {                                                                               \
         if (!isHeap() || heap_->type != ValueType::VType)                           \
-            throw std::runtime_error("Not a " ErrLabel " array");                   \
+            throw numkit::Error("Not a " ErrLabel " array");                   \
         return heap_->buffer ? heap_->buffer->as<CType>()    \
                              : nullptr;                                             \
     }                                                                               \
     CType *Value::MutFn()                                                           \
     {                                                                               \
         if (!isHeap() || heap_->type != ValueType::VType)                           \
-            throw std::runtime_error("Not a " ErrLabel " array");                   \
+            throw numkit::Error("Not a " ErrLabel " array");                   \
         detach();                                                                   \
         return heap_->buffer ? heap_->buffer->as<CType>()          \
                              : nullptr;                                             \
@@ -3913,7 +3913,7 @@ void Value::promoteToComplex(keel::Allocator *mr)
     if (t == ValueType::COMPLEX)
         return;
     if (t != ValueType::DOUBLE && t != ValueType::SINGLE)
-        throw std::runtime_error("Can only promote double or single to complex");
+        throw numkit::Error("Can only promote double or single to complex");
     keel::usize n = numel();
     if (heap_ == nullptr) {
         keel::f64 v = scalar_;
@@ -3921,7 +3921,7 @@ void Value::promoteToComplex(keel::Allocator *mr)
         return;
     }
     if (!isHeap())
-        throw std::runtime_error("Cannot promote to complex");
+        throw numkit::Error("Cannot promote to complex");
     detach(); // COW: ensure we have our own copy before mutating
     if (!mr)
         mr = heap_->alloc;
@@ -3949,7 +3949,7 @@ void Value::promoteToComplex(keel::Allocator *mr)
 keel::f64 Value::operator()(keel::usize i) const
 {
     if (i >= numel())
-        throw std::runtime_error("Index out of bounds");
+        throw numkit::Error("Index out of bounds");
     return doubleData()[i];
 }
 keel::f64 Value::operator()(keel::usize r, keel::usize c) const
@@ -3963,7 +3963,7 @@ keel::f64 Value::operator()(keel::usize r, keel::usize c, keel::usize p) const
 keel::f64 &Value::elem(keel::usize i)
 {
     if (i >= numel())
-        throw std::runtime_error("Index out of bounds");
+        throw numkit::Error("Index out of bounds");
     return doubleDataMut()[i];
 }
 keel::f64 &Value::elem(keel::usize r, keel::usize c)
@@ -3978,23 +3978,23 @@ keel::f64 &Value::elem(keel::usize r, keel::usize c, keel::usize p)
 char Value::charElem(keel::usize i) const
 {
     if (i >= numel())
-        throw std::runtime_error("Char index out of bounds");
+        throw numkit::Error("Char index out of bounds");
     return charData()[i];
 }
 char &Value::charElemMut(keel::usize i)
 {
     if (i >= numel())
-        throw std::runtime_error("Char index out of bounds");
+        throw numkit::Error("Char index out of bounds");
     return charDataMut()[i];
 }
 
 keel::String Value::charRow(keel::usize r, keel::Allocator *alloc) const
 {
     if (type() != ValueType::CHAR)
-        throw std::runtime_error("charRow: value is not a char array");
+        throw numkit::Error("charRow: value is not a char array");
     auto &d = dims();
     if (r >= d.rows())
-        throw std::runtime_error("charRow: row index out of bounds");
+        throw numkit::Error("charRow: row index out of bounds");
     const char *cd = charData();
     keel::usize R = d.rows(), C = d.cols();
     keel::String s = keel::String::with_capacity(C, alloc);
@@ -4079,7 +4079,7 @@ void Value::resize(keel::usize newRows, keel::usize newCols, keel::Allocator *mr
     }
     const keel::usize es = elementSize(heap_->type);
     if (es == 0)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Cannot resize array of type '{}'", mtypeName(heap_->type)).c_str());
     const keel::usize nb = checkedMulSize(checkedMulSize(newRows, newCols), es);
     auto *nb2 = (nb > 0) ? DataBuffer::create(nb, mr) : nullptr;
@@ -4148,7 +4148,7 @@ void Value::resize3d(keel::usize nr, keel::usize nc, keel::usize np, keel::Alloc
     }
     const keel::usize es = elementSize(heap_->type);
     if (es == 0)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("Cannot resize array of type '{}'", mtypeName(heap_->type)).c_str());
     const keel::usize nb = checkedMulSize(checkedMulSize(checkedMulSize(nr, nc), np), es);
     auto *nb2 = (nb > 0) ? DataBuffer::create(nb, mr) : nullptr;
@@ -4176,7 +4176,7 @@ void Value::resizeND(const keel::usize *newDims, keel::i32 nd, keel::Allocator *
 {
     constexpr keel::i32 kMaxNd = Dims::kMaxRank;
     if (nd <= 0 || nd > kMaxNd)
-        throw std::runtime_error("resizeND: rank out of range");
+        throw numkit::Error("resizeND: rank out of range");
     if (nd == 1) { resize(newDims[0], 1, mr); return; }
     if (nd == 2) { resize(newDims[0], newDims[1], mr); return; }
     if (nd == 3) { resize3d(newDims[0], newDims[1], newDims[2], mr); return; }
@@ -4250,7 +4250,7 @@ void Value::resizeND(const keel::usize *newDims, keel::i32 nd, keel::Allocator *
 
     const keel::usize es = elementSize(t);
     if (es == 0)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<96>("resizeND not supported for type '{}'", mtypeName(t)).c_str());
 
     const keel::usize nb = checkedMulSize(newTotal, es);
@@ -4297,7 +4297,7 @@ void Value::ensureSize(keel::usize idx, keel::Allocator *mr)
         else if (dims().isVector() || dims().rows() <= 1)
             resize(1, need, mr);
         else
-            throw std::runtime_error("Index exceeds array dimensions");
+            throw numkit::Error("Index exceeds array dimensions");
     }
 }
 
@@ -4340,7 +4340,7 @@ void Value::appendScalar(keel::f64 v, keel::Allocator *mr)
         return;
     }
     if (!isHeap())
-        throw std::runtime_error("Cannot append");
+        throw numkit::Error("Cannot append");
     detach();
     if (!mr)
         mr = heap_->alloc;
@@ -4406,7 +4406,7 @@ void Value::appendScalarCol(keel::f64 v, keel::Allocator *mr)
         return;
     }
     if (!isHeap())
-        throw std::runtime_error("Cannot append");
+        throw numkit::Error("Cannot append");
     detach();
     if (!mr)
         mr = heap_->alloc;
@@ -4437,40 +4437,40 @@ void Value::appendScalarCol(keel::f64 v, keel::Allocator *mr)
 Value &Value::cellAt(keel::usize i)
 {
     if (!isHeap() || !heap_->cellData)
-        throw std::runtime_error("Not a cell");
+        throw numkit::Error("Not a cell");
     if (i >= heap_->cellData->size())
-        throw std::runtime_error("Cell index out of bounds");
+        throw numkit::Error("Cell index out of bounds");
     detach(); // COW: ensure we have our own copy before mutation
     return (*heap_->cellData)[i];
 }
 const Value &Value::cellAt(keel::usize i) const
 {
     if (!isHeap() || !heap_->cellData)
-        throw std::runtime_error("Not a cell");
+        throw numkit::Error("Not a cell");
     if (i >= heap_->cellData->size())
-        throw std::runtime_error("Cell index out of bounds");
+        throw numkit::Error("Cell index out of bounds");
     return (*heap_->cellData)[i];
 }
 keel::Array<Value> &Value::cellDataVec()
 {
     if (!isHeap() || !heap_->cellData)
-        throw std::runtime_error("Not a cell");
+        throw numkit::Error("Not a cell");
     detach(); // COW
     return *heap_->cellData;
 }
 const keel::Array<Value> &Value::cellDataVec() const
 {
     if (!isHeap() || !heap_->cellData)
-        throw std::runtime_error("Not a cell");
+        throw numkit::Error("Not a cell");
     return *heap_->cellData;
 }
 
 Value &Value::field(keel::StringRef n)
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
-        throw std::runtime_error("Not a struct");
+        throw numkit::Error("Not a struct");
     if (heap_->structArray->size() != 1)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<192>(
                 "Cannot dot-index a non-scalar struct array directly; "
                 "use s(i).{} or arrayfun.", n).c_str());
@@ -4486,16 +4486,16 @@ Value &Value::field(keel::StringRef n)
 const Value &Value::field(keel::StringRef n) const
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
-        throw std::runtime_error("Not a struct");
+        throw numkit::Error("Not a struct");
     if (heap_->structArray->size() != 1)
-        throw std::runtime_error(
+        throw numkit::Error(
             keel::format_small<192>(
                 "Cannot dot-index a non-scalar struct array directly; "
                 "use s(i).{} or arrayfun.", n).c_str());
     const auto &m = (*heap_->structArray)[0];
     if (const Value *vp = m.get(n))
         return *vp;
-    throw std::runtime_error(keel::format_small<128>("Field not found: {}", n).c_str());
+    throw numkit::Error(keel::format_small<128>("Field not found: {}", n).c_str());
 }
 bool Value::hasField(keel::StringRef n) const
 {
@@ -4514,7 +4514,7 @@ keel::HashMap<keel::String, Value> &Value::structFields()
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray
         || heap_->structArray->size() != 1)
-        throw std::runtime_error("structFields() is only valid for a 1×1 struct");
+        throw numkit::Error("structFields() is only valid for a 1×1 struct");
     detach();
     return (*heap_->structArray)[0];
 }
@@ -4522,7 +4522,7 @@ const keel::HashMap<keel::String, Value> &Value::structFields() const
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray
         || heap_->structArray->size() != 1)
-        throw std::runtime_error("structFields() is only valid for a 1×1 struct");
+        throw numkit::Error("structFields() is only valid for a 1×1 struct");
     return (*heap_->structArray)[0];
 }
 
@@ -4571,7 +4571,7 @@ keel::usize Value::growStructArrayND(const keel::usize *coords, keel::i32 nd,
                                 keel::Allocator *mr)
 {
     if (nd <= 0 || nd > Dims::kMaxRank)
-        throw std::runtime_error("struct-array subscript rank out of range");
+        throw numkit::Error("struct-array subscript rank out of range");
     if (!mr) {
         mr = (isHeap() && heap_->alloc) ? heap_->alloc
                                         : keel::default_allocator();
@@ -4654,7 +4654,7 @@ keel::usize Value::growStructArrayND(const keel::usize *coords, keel::i32 nd,
 keel::usize Value::growCellTo(const keel::usize *coords, keel::i32 nd, keel::Allocator *mr)
 {
     if (nd <= 0 || nd > Dims::kMaxRank)
-        throw std::runtime_error("cell subscript rank out of range");
+        throw numkit::Error("cell subscript rank out of range");
     if (!mr) {
         mr = (isHeap() && heap_->alloc) ? heap_->alloc
                                         : keel::default_allocator();
@@ -4662,7 +4662,7 @@ keel::usize Value::growCellTo(const keel::usize *coords, keel::i32 nd, keel::All
     if (isUnset() || isEmpty())
         *this = Value::cell(0, 0, mr);
     if (!isCell())
-        throw std::runtime_error("Cell contents indexing on a non-cell value");
+        throw numkit::Error("Cell contents indexing on a non-cell value");
 
     auto linearIn = [&](const Dims &d) {
         keel::usize lin = 0, stride = 1;
@@ -4728,18 +4728,18 @@ keel::usize Value::growCellTo(const keel::usize *coords, keel::i32 nd, keel::All
 keel::HashMap<keel::String, Value> &Value::structArrayElem(keel::usize i)
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
-        throw std::runtime_error("Not a struct");
+        throw numkit::Error("Not a struct");
     if (i >= heap_->structArray->size())
-        throw std::runtime_error("struct array index out of range");
+        throw numkit::Error("struct array index out of range");
     detach();
     return (*heap_->structArray)[i];
 }
 const keel::HashMap<keel::String, Value> &Value::structArrayElem(keel::usize i) const
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
-        throw std::runtime_error("Not a struct");
+        throw numkit::Error("Not a struct");
     if (i >= heap_->structArray->size())
-        throw std::runtime_error("struct array index out of range");
+        throw numkit::Error("struct array index out of range");
     return (*heap_->structArray)[i];
 }
 
@@ -4767,9 +4767,9 @@ inline keel::FixedString<64> fmtGeneral(keel::f64 v) noexcept
 void Value::setField(keel::usize linearIdx, keel::StringRef name, const Value &v)
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
-        throw std::runtime_error("Not a struct");
+        throw numkit::Error("Not a struct");
     if (linearIdx >= heap_->structArray->size())
-        throw std::runtime_error("struct array index out of range");
+        throw numkit::Error("struct array index out of range");
     detach();
     // After detach heap_ may differ; re-fetch via heap_.
     appendIfNew(heap_->fieldOrder, name, heap_->alloc);
@@ -4788,7 +4788,7 @@ void Value::setField(keel::usize linearIdx, keel::StringRef name, const Value &v
 void Value::setFieldAll(keel::StringRef name, const Value &v)
 {
     if (!isHeap() || heap_->type != ValueType::STRUCT || !heap_->structArray)
-        throw std::runtime_error("Not a struct");
+        throw numkit::Error("Not a struct");
     detach();
     appendIfNew(heap_->fieldOrder, name, heap_->alloc);
     for (auto &m : *heap_->structArray) {

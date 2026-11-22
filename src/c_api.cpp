@@ -1,3 +1,4 @@
+#include <numkit/value/error.hpp>
 // src/c_api.cpp
 //
 // Foundation `numkit_value_c` C-ABI implementation.
@@ -44,7 +45,7 @@ numkit::ValueType toValueType(numkit_dtype dt)
     case NUMKIT_DTYPE_FUNC_HANDLE: return ValueType::FUNC_HANDLE;
     case NUMKIT_DTYPE_OBJECT:      return ValueType::OBJECT;
     default:
-        throw std::invalid_argument("Unsupported numkit_dtype");
+        throw numkit::Error("Unsupported numkit_dtype");
     }
 }
 
@@ -114,7 +115,7 @@ const Value &unboxValue(const numkit_val *v)
 
 Value &unboxValueMut(numkit_val *v)
 {
-    if (!v) throw std::invalid_argument("Null numkit_val* pointer");
+    if (!v) throw numkit::Error("Null numkit_val* pointer");
     return v->val;
 }
 
@@ -183,14 +184,14 @@ numkit_val *numkit_val_array_copy(const void *data,
     clearError(err);
     try {
         if (!dims || ndims <= 0) {
-            throw std::invalid_argument("dims must be non-null and ndims > 0");
+            throw numkit::Error("dims must be non-null and ndims > 0");
         }
         ValueType vt = toValueType(dtype);
         Value arr = Value::matrixND(dims, ndims, vt);
         size_t bytes = arr.rawBytes();
         if (bytes > 0) {
             if (!data) {
-                throw std::invalid_argument("data pointer is null for non-empty array");
+                throw numkit::Error("data pointer is null for non-empty array");
             }
             keel::mem_copy(arr.rawDataMut(), data, bytes);
         }
@@ -210,12 +211,12 @@ numkit_val *numkit_val_view(const void *data,
     clearError(err);
     try {
         if (!dims || ndims <= 0) {
-            throw std::invalid_argument("dims must be non-null and ndims > 0");
+            throw numkit::Error("dims must be non-null and ndims > 0");
         }
         ValueType vt = toValueType(dtype);
         Dims d(dims, ndims);
         if (d.numel() > 0 && !data) {
-            throw std::invalid_argument("data pointer is null for non-empty view");
+            throw numkit::Error("data pointer is null for non-empty view");
         }
         return boxValue(Value::view(data, vt, d));
     } catch (const std::exception &ex) {
@@ -233,7 +234,7 @@ numkit_val *numkit_val_alloc_array(numkit_dtype dtype,
     clearError(err);
     try {
         if (!dims || ndims <= 0) {
-            throw std::invalid_argument("dims must be non-null and ndims > 0");
+            throw numkit::Error("dims must be non-null and ndims > 0");
         }
         ValueType vt = toValueType(dtype);
         Value arr = Value::matrixND(dims, ndims, vt);
@@ -419,7 +420,7 @@ numkit_val *numkit_cell_create(const size_t *dims, int ndims, numkit_error *err)
     clearError(err);
     try {
         if (!dims || ndims <= 0) {
-            throw std::invalid_argument("dims must be non-null and ndims > 0");
+            throw numkit::Error("dims must be non-null and ndims > 0");
         }
         return boxValue(Value::cellND(dims, ndims));
     } catch (const std::exception &ex) {
@@ -437,7 +438,7 @@ numkit_val *numkit_cell_get(const numkit_val *cell, size_t linear_idx, numkit_er
     }
     try {
         if (linear_idx >= cell->val.numel()) {
-            throw std::out_of_range("Cell index out of bounds");
+            throw numkit::Error("Cell index out of bounds");
         }
         return boxValue(cell->val.cellAt(linear_idx));
     } catch (const std::exception &ex) {
@@ -458,7 +459,7 @@ int numkit_cell_set(numkit_val *cell,
     }
     try {
         if (linear_idx >= cell->val.numel()) {
-            throw std::out_of_range("Cell index out of bounds");
+            throw numkit::Error("Cell index out of bounds");
         }
         cell->val.cellAt(linear_idx) = elem ? elem->val : Value::Empty;
         return 0;
@@ -518,18 +519,18 @@ numkit_val *numkit_struct_get(const numkit_val *s,
     try {
         if (s->val.isStructArray()) {
             if (linear_idx >= s->val.numel()) {
-                throw std::out_of_range("Struct array index out of bounds");
+                throw numkit::Error("Struct array index out of bounds");
             }
             const auto &m = s->val.structArrayElem(linear_idx);
             const Value *vp = m.get(keel::StringRef(field));
             if (!vp) {
-                throw std::runtime_error(
+                throw numkit::Error(
                     keel::format_small<128>("Non-existent field '{}'", field).c_str());
             }
             return boxValue(*vp);
         }
         if (linear_idx != 0) {
-            throw std::out_of_range("Struct index out of bounds");
+            throw numkit::Error("Struct index out of bounds");
         }
         return boxValue(s->val.field(field));
     } catch (const std::exception &ex) {
