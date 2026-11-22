@@ -95,6 +95,10 @@ struct BuiltinClass
     bool         isHandle = false;
     bool         isSealed = false;
     bool         isAbstract = false;
+    // Classes sharing a non-empty heterogeneousGroup may coexist in the same
+    // object array and promote numeric placeholder arrays (e.g. zeros(1,N))
+    // on indexed assignment.
+    keel::String heterogeneousGroup;
     keel::Array<keel::String> superclasses;
 
     keel::SmallFunction<Value(keel::ArrayRef<Value> args, CallContext &ctx), 32> construct;
