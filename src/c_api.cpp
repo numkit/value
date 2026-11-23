@@ -6,11 +6,11 @@
 #include <numkit/value/dims.hpp>
 #include <numkit/value/value_type.hpp>
 
+#include <keel/atomic.h>
 #include <keel/format.h>
 #include <keel/memory.h>
 #include <keel/string.h>
 
-#include <atomic>
 #include <new>
 
 struct numkit_val_s {
@@ -20,7 +20,7 @@ struct numkit_val_s {
 
 namespace {
 
-std::atomic<keel::i64> g_liveValues{0};
+keel::Atomic<keel::i64> g_liveValues{0};
 
 numkit::ValueType toValueType(numkit_dtype dt)
 {
@@ -103,7 +103,7 @@ numkit_val *boxValue(Value v)
     if (!mem)
         throw std::bad_alloc();
     auto *p = ::new (mem) numkit_val_s(keel::move(v));
-    g_liveValues.fetch_add(1, std::memory_order_relaxed);
+    g_liveValues.fetch_add(1, keel::MemoryOrder::Relaxed);
     return p;
 }
 
@@ -137,7 +137,7 @@ uint32_t numkit_abi_version(void)
 
 int64_t numkit_debug_live_values(void)
 {
-    return g_liveValues.load(std::memory_order_relaxed);
+    return g_liveValues.load(keel::MemoryOrder::Relaxed);
 }
 
 numkit_val *numkit_val_empty(void)
@@ -262,7 +262,7 @@ void numkit_val_release(numkit_val *v)
     keel::Allocator *a = keel::default_allocator();
     v->~numkit_val_s();
     a->free_bytes(v, sizeof(numkit_val_s), alignof(numkit_val_s));
-    g_liveValues.fetch_sub(1, std::memory_order_relaxed);
+    g_liveValues.fetch_sub(1, keel::MemoryOrder::Relaxed);
 }
 
 numkit_dtype numkit_val_type(const numkit_val *v)
