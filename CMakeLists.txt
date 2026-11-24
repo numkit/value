@@ -29,7 +29,7 @@ if(NOT TARGET keel::keel)
         FetchContent_Declare(
             keel
             GIT_REPOSITORY https://github.com/keelcpp/keel.git
-            GIT_TAG        869a5c07a5d77341e5f6acbac5f8e024b274ea08
+            GIT_TAG        5d80fa7d6984e7325fc8d5317c5db13830381429
         )
         FetchContent_MakeAvailable(keel)
     endif()
@@ -57,6 +57,10 @@ if(EMSCRIPTEN)
 endif()
 
 if(COMMAND keel_enforce_guidelines)
+    set(_NK_VALUE_GUIDELINE_DEFS "")
+    if(MSVC)
+        set(_NK_VALUE_GUIDELINE_DEFS COMPILE_DEFINITIONS "__EXCEPTIONS=1")
+    endif()
     keel_enforce_guidelines(numkit_value
         SCOPE ALL
         BAN_RAW_INTS ALL
@@ -66,6 +70,7 @@ if(COMMAND keel_enforce_guidelines)
         ALLOWED_ANGLE_PREFIXES "numkit/"
         EXCLUDE_FILES "c_api\\.h$" "c_api\\.cpp$"
         STANDALONE_HEADERS ${NUMKIT_VALUE_BUILD_TESTS}
+        ${_NK_VALUE_GUIDELINE_DEFS}
         WARNINGS OFF
     )
 endif()
