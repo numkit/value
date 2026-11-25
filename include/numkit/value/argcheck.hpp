@@ -329,6 +329,26 @@ inline keel::usize roundLength(const Value &v, keel::i32 argNum, keel::StringRef
     return keel::as<keel::usize>(r);
 }
 
+inline keel::usize floorLength(const Value &v, keel::i32 argNum, keel::StringRef argName,
+                               keel::StringRef fn)
+{
+    const keel::f64 d = expectedReal(v, argNum, argName, fn);
+    if (!keel::is_finite(d))
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) must be finite (got {}).",
+                         fn, argNum, argName, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:{}NotFinite", fn, argName));
+    const keel::f64 r = keel::floor(d);
+    if (r <= 0.0) return 0u;
+    keel::usize out = 0;
+    if (!tryNonNegSize(r, out))
+        detail::fail(keel::format_small<192>(
+                         "{}: input {} ({}) exceeds the supported maximum (got {}).",
+                         fn, argNum, argName, detail::num(d)),
+                     fn, keel::format_small<96>("numkit:{}:{}TooLarge", fn, argName));
+    return out;
+}
+
 // ============================================================
 // String-valued option inputs: one of a fixed choice set.
 // ============================================================
