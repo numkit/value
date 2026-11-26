@@ -38,6 +38,10 @@ struct NativePayload
         (void)alloc;
         return nullptr;
     }
+    virtual keel::StringRef concreteClassName() const noexcept
+    {
+        return {};
+    }
 };
 
 // ============================================================

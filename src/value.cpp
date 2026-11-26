@@ -3245,6 +3245,8 @@ Value Value::objectGather(const keel::usize *srcLinear, const Dims &resultDims,
     h->objIsHandle = handle;
     h->dims = resultDims;
     h->objStates.reserve(n);
+    keel::StringRef gatheredConcrete;
+    bool allConcrete = (n > 0);
     for (keel::usize k = 0; k < n; ++k) {
         keel::usize s = srcLinear[k];
         if (s >= heap_->objStates.size())
@@ -3252,7 +3254,19 @@ Value Value::objectGather(const keel::usize *srcLinear, const Dims &resultDims,
         const auto &src = heap_->objStates[s];
         // value class → independent copy (safe to mutate); handle → alias.
         h->objStates.push_back((handle || !src) ? src : src->deepCopy(mr));
+        if (allConcrete) {
+            const keel::StringRef cc = (src && src->native) ? src->native->concreteClassName() : keel::StringRef{};
+            if (cc.empty()) {
+                allConcrete = false;
+            } else if (gatheredConcrete.empty()) {
+                gatheredConcrete = cc;
+            } else if (gatheredConcrete != cc) {
+                allConcrete = false;
+            }
+        }
     }
+    if (allConcrete && !gatheredConcrete.empty())
+        *h->objClass = keel::String(gatheredConcrete, h->alloc);
     Value out;
     out.heap_ = h.release();
     return out;
