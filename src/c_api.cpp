@@ -142,37 +142,65 @@ int64_t numkit_debug_live_values(void)
 
 numkit_val *numkit_val_empty(void)
 {
-    return boxValue(Value::Empty);
+    try {
+        return boxValue(Value::Empty);
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 numkit_val *numkit_val_scalar(double v)
 {
-    return boxValue(Value::scalar(v));
+    try {
+        return boxValue(Value::scalar(v));
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 numkit_val *numkit_val_logical(int b)
 {
-    return boxValue(Value::logicalScalar(b != 0));
+    try {
+        return boxValue(Value::logicalScalar(b != 0));
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 numkit_val *numkit_val_complex_scalar(double re, double im)
 {
-    return boxValue(Value::complexScalar(re, im));
+    try {
+        return boxValue(Value::complexScalar(re, im));
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 numkit_val *numkit_val_string(const char *utf8)
 {
-    return boxValue(Value::stringScalar(utf8 ? utf8 : ""));
+    try {
+        return boxValue(Value::stringScalar(utf8 ? utf8 : ""));
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 numkit_val *numkit_val_char(const char *utf8)
 {
-    return boxValue(Value::fromString(utf8 ? utf8 : ""));
+    try {
+        return boxValue(Value::fromString(utf8 ? utf8 : ""));
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 numkit_val *numkit_val_func_handle(const char *name)
 {
-    return boxValue(Value::funcHandle(name ? name : ""));
+    try {
+        return boxValue(Value::funcHandle(name ? name : ""));
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 numkit_val *numkit_val_array_copy(const void *data,
@@ -183,8 +211,8 @@ numkit_val *numkit_val_array_copy(const void *data,
 {
     clearError(err);
     try {
-        if (!dims || ndims <= 0) {
-            throw numkit::Error("dims must be non-null and ndims > 0");
+        if (!dims || ndims <= 0 || ndims > Dims::kMaxRank) {
+            throw numkit::Error("dims must be non-null and 1 <= ndims <= 32");
         }
         ValueType vt = toValueType(dtype);
         Value arr = Value::matrixND(dims, ndims, vt);
@@ -199,6 +227,9 @@ numkit_val *numkit_val_array_copy(const void *data,
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
         return nullptr;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_val_array_copy");
+        return nullptr;
     }
 }
 
@@ -210,8 +241,8 @@ numkit_val *numkit_val_view(const void *data,
 {
     clearError(err);
     try {
-        if (!dims || ndims <= 0) {
-            throw numkit::Error("dims must be non-null and ndims > 0");
+        if (!dims || ndims <= 0 || ndims > Dims::kMaxRank) {
+            throw numkit::Error("dims must be non-null and 1 <= ndims <= 32");
         }
         ValueType vt = toValueType(dtype);
         Dims d(dims, ndims);
@@ -221,6 +252,9 @@ numkit_val *numkit_val_view(const void *data,
         return boxValue(Value::view(data, vt, d));
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
+        return nullptr;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_val_view");
         return nullptr;
     }
 }
@@ -233,8 +267,8 @@ numkit_val *numkit_val_alloc_array(numkit_dtype dtype,
 {
     clearError(err);
     try {
-        if (!dims || ndims <= 0) {
-            throw numkit::Error("dims must be non-null and ndims > 0");
+        if (!dims || ndims <= 0 || ndims > Dims::kMaxRank) {
+            throw numkit::Error("dims must be non-null and 1 <= ndims <= 32");
         }
         ValueType vt = toValueType(dtype);
         Value arr = Value::matrixND(dims, ndims, vt);
@@ -247,13 +281,21 @@ numkit_val *numkit_val_alloc_array(numkit_dtype dtype,
         if (out_data_ptr) *out_data_ptr = nullptr;
         setError(err, 1, ex.what());
         return nullptr;
+    } catch (...) {
+        if (out_data_ptr) *out_data_ptr = nullptr;
+        setError(err, 1, "Unknown C++ exception in numkit_val_alloc_array");
+        return nullptr;
     }
 }
 
 numkit_val *numkit_val_clone(const numkit_val *v)
 {
     if (!v) return nullptr;
-    return boxValue(v->val);
+    try {
+        return boxValue(v->val);
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 void numkit_val_release(numkit_val *v)
@@ -343,6 +385,9 @@ double numkit_val_as_double(const numkit_val *v, numkit_error *err)
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
         return 0.0;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_val_as_double");
+        return 0.0;
     }
 }
 
@@ -357,6 +402,9 @@ int numkit_val_as_bool(const numkit_val *v, numkit_error *err)
         return v->val.toBool() ? 1 : 0;
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
+        return 0;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_val_as_bool");
         return 0;
     }
 }
@@ -378,6 +426,9 @@ int numkit_val_as_complex(const numkit_val *v,
         return 0;
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
+        return 1;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_val_as_complex");
         return 1;
     }
 }
@@ -412,19 +463,27 @@ size_t numkit_val_object_class(const numkit_val *v, char *buf, size_t buf_cap)
         if (buf && buf_cap > 0) buf[0] = '\0';
         return 0;
     }
-    return writeStrBuf(v->val.objectClassNameRef(), buf, buf_cap);
+    try {
+        return writeStrBuf(v->val.objectClassNameRef(), buf, buf_cap);
+    } catch (...) {
+        if (buf && buf_cap > 0) buf[0] = '\0';
+        return 0;
+    }
 }
 
 numkit_val *numkit_cell_create(const size_t *dims, int ndims, numkit_error *err)
 {
     clearError(err);
     try {
-        if (!dims || ndims <= 0) {
-            throw numkit::Error("dims must be non-null and ndims > 0");
+        if (!dims || ndims <= 0 || ndims > Dims::kMaxRank) {
+            throw numkit::Error("dims must be non-null and 1 <= ndims <= 32");
         }
         return boxValue(Value::cellND(dims, ndims));
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
+        return nullptr;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_cell_create");
         return nullptr;
     }
 }
@@ -443,6 +502,9 @@ numkit_val *numkit_cell_get(const numkit_val *cell, size_t linear_idx, numkit_er
         return boxValue(cell->val.cellAt(linear_idx));
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
+        return nullptr;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_cell_get");
         return nullptr;
     }
 }
@@ -466,6 +528,9 @@ int numkit_cell_set(numkit_val *cell,
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
         return 1;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_cell_set");
+        return 1;
     }
 }
 
@@ -480,13 +545,20 @@ numkit_val *numkit_struct_create(size_t rows, size_t cols, numkit_error *err)
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
         return nullptr;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_struct_create");
+        return nullptr;
     }
 }
 
 size_t numkit_struct_num_fields(const numkit_val *s)
 {
     if (!s || !s->val.isStruct()) return 0;
-    return s->val.fieldNamesInOrder().size();
+    try {
+        return s->val.fieldNamesInOrder().size();
+    } catch (...) {
+        return 0;
+    }
 }
 
 size_t numkit_struct_field_name(const numkit_val *s,
@@ -498,12 +570,17 @@ size_t numkit_struct_field_name(const numkit_val *s,
         if (buf && buf_cap > 0) buf[0] = '\0';
         return 0;
     }
-    auto names = s->val.fieldNamesInOrder();
-    if (field_idx >= names.size()) {
+    try {
+        auto names = s->val.fieldNamesInOrder();
+        if (field_idx >= names.size()) {
+            if (buf && buf_cap > 0) buf[0] = '\0';
+            return 0;
+        }
+        return writeStrBuf(names[field_idx], buf, buf_cap);
+    } catch (...) {
         if (buf && buf_cap > 0) buf[0] = '\0';
         return 0;
     }
-    return writeStrBuf(names[field_idx], buf, buf_cap);
 }
 
 numkit_val *numkit_struct_get(const numkit_val *s,
@@ -536,6 +613,9 @@ numkit_val *numkit_struct_get(const numkit_val *s,
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
         return nullptr;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_struct_get");
+        return nullptr;
     }
 }
 
@@ -555,6 +635,9 @@ int numkit_struct_set(numkit_val *s,
         return 0;
     } catch (const std::exception &ex) {
         setError(err, 1, ex.what());
+        return 1;
+    } catch (...) {
+        setError(err, 1, "Unknown C++ exception in numkit_struct_set");
         return 1;
     }
 }

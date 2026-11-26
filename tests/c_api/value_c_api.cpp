@@ -433,3 +433,75 @@ TEST(NumkitValueCApi, ZeroAllocStringRefsAndAllocatorRouting)
     arena.reset();
     EXPECT_EQ(arena.used(), 0u);
 }
+
+TEST(NumkitValueCApi, NullAndInvalidDimsSafety)
+{
+    const keel::i64 base = numkit_debug_live_values();
+    numkit_error err{};
+
+    // Null handle guards
+    EXPECT_EQ(numkit_val_clone(nullptr), nullptr);
+    numkit_val_release(nullptr);
+    EXPECT_EQ(numkit_val_type(nullptr), NUMKIT_DTYPE_UNKNOWN);
+    EXPECT_EQ(numkit_val_numel(nullptr), 0u);
+    EXPECT_EQ(numkit_val_ndims(nullptr), 0u);
+    EXPECT_EQ(numkit_val_dims(nullptr, nullptr, 0), 0u);
+    EXPECT_EQ(numkit_val_is_empty(nullptr), 1);
+    EXPECT_EQ(numkit_val_is_scalar(nullptr), 0);
+    EXPECT_EQ(numkit_val_raw_data(nullptr), nullptr);
+    EXPECT_EQ(numkit_val_raw_bytes(nullptr), 0u);
+    EXPECT_DOUBLE_EQ(numkit_val_as_double(nullptr, &err), 0.0);
+    EXPECT_NE(err.code, 0);
+    EXPECT_EQ(numkit_val_as_bool(nullptr, &err), 0);
+    EXPECT_NE(err.code, 0);
+    EXPECT_NE(numkit_val_as_complex(nullptr, nullptr, nullptr, &err), 0);
+    EXPECT_NE(err.code, 0);
+
+    char buf[16] = "dirty";
+    EXPECT_EQ(numkit_val_object_class(nullptr, buf, sizeof(buf)), 0u);
+    EXPECT_STREQ(buf, "");
+    EXPECT_EQ(numkit_struct_num_fields(nullptr), 0u);
+    buf[0] = 'x';
+    EXPECT_EQ(numkit_struct_field_name(nullptr, 0, buf, sizeof(buf)), 0u);
+    EXPECT_STREQ(buf, "");
+    EXPECT_EQ(numkit_cell_get(nullptr, 0, &err), nullptr);
+    EXPECT_NE(err.code, 0);
+    EXPECT_NE(numkit_cell_set(nullptr, 0, nullptr, &err), 0);
+    EXPECT_NE(err.code, 0);
+    EXPECT_EQ(numkit_struct_get(nullptr, 0, "a", &err), nullptr);
+    EXPECT_NE(err.code, 0);
+    EXPECT_NE(numkit_struct_set(nullptr, 0, "a", nullptr, &err), 0);
+    EXPECT_NE(err.code, 0);
+
+    // Invalid dims (null, <= 0, > Dims::kMaxRank)
+    keel::usize manyDims[33];
+    for (keel::usize &d : manyDims) d = 1;
+    keel::f64 sample = 1.0;
+    void *mutPtr = reinterpret_cast<void *>(0x1);
+
+    for (int badNdims : {-1, 0, numkit::Dims::kMaxRank + 1}) {
+        const keel::usize *dptr = (badNdims > 0) ? manyDims : nullptr;
+        EXPECT_EQ(numkit_val_array_copy(&sample, NUMKIT_DTYPE_DOUBLE, dptr, badNdims, &err), nullptr);
+        EXPECT_NE(err.code, 0);
+        EXPECT_EQ(numkit_val_view(&sample, NUMKIT_DTYPE_DOUBLE, dptr, badNdims, &err), nullptr);
+        EXPECT_NE(err.code, 0);
+        mutPtr = reinterpret_cast<void *>(0x1);
+        EXPECT_EQ(numkit_val_alloc_array(NUMKIT_DTYPE_DOUBLE, dptr, badNdims, &mutPtr, &err), nullptr);
+        EXPECT_EQ(mutPtr, nullptr);
+        EXPECT_NE(err.code, 0);
+        EXPECT_EQ(numkit_cell_create(dptr, badNdims, &err), nullptr);
+        EXPECT_NE(err.code, 0);
+    }
+
+    // Null dims with valid ndims
+    EXPECT_EQ(numkit_val_array_copy(&sample, NUMKIT_DTYPE_DOUBLE, nullptr, 2, &err), nullptr);
+    EXPECT_NE(err.code, 0);
+    EXPECT_EQ(numkit_val_view(&sample, NUMKIT_DTYPE_DOUBLE, nullptr, 2, &err), nullptr);
+    EXPECT_NE(err.code, 0);
+    EXPECT_EQ(numkit_val_alloc_array(NUMKIT_DTYPE_DOUBLE, nullptr, 2, &mutPtr, &err), nullptr);
+    EXPECT_NE(err.code, 0);
+    EXPECT_EQ(numkit_cell_create(nullptr, 2, &err), nullptr);
+    EXPECT_NE(err.code, 0);
+
+    EXPECT_EQ(numkit_debug_live_values(), base);
+}
